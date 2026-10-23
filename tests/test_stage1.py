@@ -4,6 +4,7 @@ import http.client
 import io
 import json
 import os
+import socket
 import struct
 import sys
 import tempfile
@@ -206,6 +207,38 @@ class HTTPWorkflowTests(unittest.TestCase):
         status, body = self.request("POST", "/api/sessions/" + self.sid + "/files", b"",
                                     {"Content-Length": str(101 * 1024 * 1024), "X-File-Name": "big.stl"})
         self.assertEqual(status, 413)
+
+    def test_early_rejection_returns_json_with_upload_still_in_flight(self):
+        if not self.live_http:
+            self.skipTest("Requires ASSISTANT_LIVE_HTTP=1 and a real TCP connection")
+        for name, authorized, length, expected in [
+                ("../bad.stl", True, 32768, 400),
+                ("wrong.exe", True, 32768, 415),
+                ("model.stl", False, 32768, 401),
+                ("model.stl", True, 101 * 1024 * 1024, 413)]:
+            with self.subTest(name=name, status=expected):
+                with socket.create_connection(("127.0.0.1", self.server.server_port), timeout=4) as connection:
+                    headers = ("POST /api/sessions/{}/files HTTP/1.0\r\n"
+                               "Host: 127.0.0.1:{}\r\n"
+                               "X-File-Name: {}\r\n"
+                               "Content-Length: {}\r\n").format(
+                                   self.sid, self.server.server_port, quote(name), length)
+                    if authorized:
+                        headers += "X-Assistant-Token: {}\r\n".format(self.server.token)
+                    connection.sendall((headers + "\r\n").encode("ascii"))
+                    response = http.client.HTTPResponse(connection)
+                    try:
+                        # Rejection must arrive without waiting for the declared body.
+                        response.begin()
+                        self.assertEqual(response.status, expected)
+                        # Bytes already in flight must not destroy the JSON response.
+                        connection.sendall(b"x" * 32768)
+                        connection.shutdown(socket.SHUT_WR)
+                        self.assertIn("error", json.loads(response.read().decode("utf-8")))
+                        self.assertEqual(connection.recv(1), b"")
+                    finally:
+                        response.close()
+        self.assertEqual(self.store.get(self.sid)["files"], {})
 
     def test_interrupted_import_and_scene_removal(self):
         fid = self.upload()[1]["id"]

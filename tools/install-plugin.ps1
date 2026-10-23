@@ -8,7 +8,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$pluginSource = Join-Path $PSScriptRoot 'plugin\AIAssistant'
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$pluginSource = Join-Path $projectRoot 'plugin\AIAssistant'
 foreach ($requiredFile in @('plugin.json', '__init__.py', 'AIAssistant.py')) {
     if (-not (Test-Path -LiteralPath (Join-Path $pluginSource $requiredFile) -PathType Leaf)) {
         throw "Plugin source is incomplete: $requiredFile is missing in $pluginSource"

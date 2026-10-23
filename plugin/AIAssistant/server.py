@@ -5,7 +5,9 @@ import mimetypes
 import os
 import binascii
 import hmac
+import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from urllib.parse import urlsplit, unquote
@@ -15,6 +17,8 @@ from .uploads import receive, MAX_FILE_SIZE
 
 log = logging.getLogger(__name__)
 WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
+CONNECTION_DRAIN_TIMEOUT = 1.0
+CONNECTION_DRAIN_LIMIT = 1024 * 1024
 
 
 class LocalServer(ThreadingMixIn, HTTPServer):
@@ -42,6 +46,27 @@ class LocalServer(ThreadingMixIn, HTTPServer):
 
     def browser_url(self):
         return self.origin + "/#token=" + self.token
+
+    def shutdown_request(self, request):
+        # A close with unread upload bytes can reset the connection on Windows,
+        # hiding an already-sent JSON error. Send EOF first, then drain briefly.
+        try:
+            request.shutdown(socket.SHUT_WR)
+            deadline = time.monotonic() + CONNECTION_DRAIN_TIMEOUT
+            remaining = CONNECTION_DRAIN_LIMIT
+            while remaining:
+                timeout = deadline - time.monotonic()
+                if timeout <= 0:
+                    break
+                request.settimeout(timeout)
+                chunk = request.recv(min(65536, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            pass
+        finally:
+            self.close_request(request)
 
 
 class Handler(BaseHTTPRequestHandler):

@@ -10,11 +10,9 @@
 Для Python-скриптов и тестов используется общая `.venv` в корне и `requirements.txt`.
 Создание среды и команды запуска описаны в [README плагина](plugin/README.md#разработка-и-проверки).
 
-Для установки или обновления плагина выполните из корня:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-plugin.ps1
-```
+Для установки или обновления плагина закройте STE Slicer и дважды щёлкните
+**`install-plugin.cmd`** в корне репозитория. Он сам запустит PowerShell.
+Окно останется открытым, чтобы можно было прочитать результат или ошибку.
 
 Скрипт копирует плагин в `%APPDATA%\steslicer\7.10\plugins\AIAssistant`.
-После установки перезапустите STE Slicer.
+После успешной установки запустите STE Slicer.

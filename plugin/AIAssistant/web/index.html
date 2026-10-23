@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Assistant · STE Slicer</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">S</span><div>STE Slicer<span class="brand-caption">AI ASSISTANT</span></div></div>
+    <button id="new-session" class="button new-session">＋ Новая задача</button>
+    <div class="section-label">ВАШИ ЗАДАЧИ</div>
+    <nav id="sessions" aria-label="Сессии диалога"></nav>
+    <div class="sidebar-note">Чаты сохраняются на этом компьютере.<br>Сцена слайсера общая для всех чатов.</div>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><span class="eyebrow">ПОДГОТОВКА ПЕЧАТИ</span><h1 id="session-title">Загрузка…</h1></div>
+      <button id="rename-session" class="button subtle">Переименовать</button>
+    </header>
+    <section class="context" aria-label="Текущие настройки слайсера">
+      <div><span class="context-label">Принтер</span><strong id="printer">—</strong></div>
+      <div><span class="context-label">Режим</span><strong id="mode">—</strong></div>
+      <div><span class="context-label">Материал</span><strong id="material">—</strong></div>
+      <div><span class="context-label">Профиль</span><strong id="profile">—</strong></div>
+      <p id="context-error" class="context-error" hidden></p>
+    </section>
+    <div class="task-line"><span id="connection" class="connection">Подключение…</span><span id="task-state"></span></div>
+    <section id="messages" class="messages" aria-label="История задачи" aria-live="polite"></section>
+    <div class="compose-area">
+      <div id="notice" class="notice" role="alert" hidden></div>
+      <div id="pending-files" class="pending-files" aria-label="Вложения к сообщению"></div>
+      <form id="composer" class="composer">
+        <label for="description" class="sr-only">Описание задачи</label>
+        <textarea id="description" placeholder="Что будем печатать? Опишите назначение детали и ваши требования…" rows="3" maxlength="20000"></textarea>
+        <div class="composer-toolbar">
+          <button id="attach" type="button" class="button subtle">＋ Прикрепить файлы</button>
+          <span class="formats">STL · OBJ · 3MF · JPG · PNG</span>
+          <button id="send" type="submit" class="button primary">Отправить ↑</button>
+        </div>
+        <input id="file-input" type="file" multiple accept=".stl,.obj,.3mf,.jpg,.jpeg,.png" hidden>
+      </form>
+      <p class="footer-note">Первый этап: описание задачи и загрузка моделей. Подбор параметров ассистентом появится позже.</p>
+    </div>
+  </main>
+  <dialog id="rename-dialog">
+    <form id="rename-form"><h2>Название задачи</h2><label for="rename-input">Название</label>
+      <input id="rename-input" maxlength="120" required>
+      <div class="dialog-actions"><button id="cancel-rename" class="button" type="button">Отмена</button><button class="button primary" type="submit">Сохранить</button></div>
+    </form>
+  </dialog>
+  <dialog id="image-dialog"><button id="close-image" class="button">Закрыть</button><img id="image-preview" alt="Прикреплённое изображение"></dialog>
+</body>
+</html>

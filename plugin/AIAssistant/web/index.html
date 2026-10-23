@@ -17,8 +17,12 @@
   </aside>
   <main>
     <header class="topbar">
-      <div><span class="eyebrow">ПОДГОТОВКА ПЕЧАТИ</span><h1 id="session-title">Загрузка…</h1></div>
-      <button id="rename-session" class="button subtle">Переименовать</button>
+      <div class="task-title">
+        <h1 id="session-title">Загрузка…</h1>
+        <button id="rename-session" type="button" class="button subtle icon-button" aria-label="Переименовать задачу" title="Переименовать задачу">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 3 5 5-12 12-6 1 1-6Z"/><path d="m13 6 5 5"/></svg>
+        </button>
+      </div>
     </header>
     <section class="context" aria-label="Текущие настройки слайсера">
       <div><span class="context-label">Принтер</span><strong id="printer">—</strong></div>
@@ -36,13 +40,16 @@
         <label for="description" class="sr-only">Описание задачи</label>
         <textarea id="description" placeholder="Что будем печатать? Опишите назначение детали и ваши требования…" rows="3" maxlength="20000"></textarea>
         <div class="composer-toolbar">
-          <button id="attach" type="button" class="button subtle">＋ Прикрепить файлы</button>
+          <button id="attach" type="button" class="button subtle" title="Выберите файлы или перетащите их в окно чата">＋ Прикрепить файлы</button>
           <span class="formats">STL · OBJ · 3MF · JPG · PNG</span>
           <button id="send" type="submit" class="button primary">Отправить ↑</button>
         </div>
         <input id="file-input" type="file" multiple accept=".stl,.obj,.3mf,.jpg,.jpeg,.png" hidden>
       </form>
       <p class="footer-note">Первый этап: описание задачи и загрузка моделей. Подбор параметров ассистентом появится позже.</p>
+    </div>
+    <div id="file-drop-overlay" class="file-drop-overlay" hidden>
+      <div class="file-drop-card"><strong id="file-drop-title">Отпустите файлы, чтобы прикрепить</strong><span>STL · OBJ · 3MF · JPG · PNG</span></div>
     </div>
   </main>
   <dialog id="rename-dialog">

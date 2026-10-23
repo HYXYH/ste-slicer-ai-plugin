@@ -123,6 +123,7 @@ function renderSession(session) {
   if (session.revision < lastRevision) return;
   currentSession = session;
   $("session-title").textContent = session.title;
+  $("session-title").title = session.title;
   $("task-state").textContent = TASK[session.task.status] || session.task.status;
   const d = draft(session.id);
   if (!d.initialized) {
@@ -140,7 +141,7 @@ function renderSession(session) {
   if (!session.messages.length) {
     const empty = node("div", "empty");
     empty.append(node("div", "empty-symbol", "↗"), node("h2", "", "Начните с детали и её задачи"),
-      node("p", "", "Прикрепите 3D-модель и опишите, где будет использоваться деталь. Модель появится в сцене STE Slicer, а описание и файлы сохранятся в этом чате."));
+      node("p", "", "Прикрепите 3D-модель кнопкой или перетащите её в окно чата и опишите назначение детали. Модель появится в сцене STE Slicer, а описание и файлы сохранятся в этом чате."));
     area.append(empty);
   }
   session.messages.forEach(message => {
@@ -199,9 +200,10 @@ $("description").onkeydown = event => {
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $("composer").requestSubmit(); }
 };
 $("attach").onclick = () => $("file-input").click();
-$("file-input").onchange = async event => {
-  const sid = current, files = Array.from(event.target.files); event.target.value = "";
-  if (!sid || !files.length || busy.has(sid)) return;
+async function uploadFiles(files, sid = current) {
+  if (!files.length) return;
+  if (!sid || !currentSession) { notice("Дождитесь загрузки задачи, затем прикрепите файлы."); return; }
+  if (busy.has(sid)) { notice("Дождитесь завершения текущей загрузки или отправки сообщения."); return; }
   busy.add(sid); updateButtons();
   const errors = [];
   try {
@@ -218,7 +220,51 @@ $("file-input").onchange = async event => {
     if (sid === current) await loadSession(sid);
   } catch (e) { errors.push(e.message); }
   finally { busy.delete(sid); updateButtons(); if (sid === current) notice(errors.join("\n")); }
+}
+$("file-input").onchange = async event => {
+  const files = Array.from(event.target.files); event.target.value = "";
+  await uploadFiles(files);
 };
+let fileDragDepth = 0;
+function isFileDrag(event) {
+  return event.dataTransfer && Array.from(event.dataTransfer.types).includes("Files");
+}
+function resetFileDrag() {
+  fileDragDepth = 0;
+  $("file-drop-overlay").hidden = true;
+}
+document.addEventListener("dragenter", event => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  fileDragDepth += 1;
+  $("file-drop-title").textContent = current && currentSession && !busy.has(current)
+    ? "Отпустите файлы, чтобы прикрепить" : "Дождитесь завершения текущей операции";
+  $("file-drop-overlay").hidden = false;
+});
+document.addEventListener("dragover", event => {
+  if (!isFileDrag(event)) return;
+  // Prevent the browser from navigating to the dropped file, including outside the composer.
+  event.preventDefault();
+  event.dataTransfer.dropEffect = current && currentSession && !busy.has(current) ? "copy" : "none";
+});
+document.addEventListener("dragleave", () => {
+  if (fileDragDepth > 0 && --fileDragDepth === 0) resetFileDrag();
+});
+document.addEventListener("drop", async event => {
+  const files = Array.from(event.dataTransfer ? event.dataTransfer.files : []);
+  const fileDrop = isFileDrag(event) || files.length > 0;
+  resetFileDrag();
+  if (!fileDrop) return;
+  event.preventDefault();
+  const items = Array.from(event.dataTransfer.items || []);
+  if (items.some(item => {
+    const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+    return entry && entry.isDirectory;
+  })) { notice("Перетаскивайте отдельные файлы, а не папки."); return; }
+  await uploadFiles(files);
+});
+document.addEventListener("dragend", resetFileDrag);
+window.addEventListener("blur", resetFileDrag);
 $("new-session").onclick = async () => {
   $("new-session").disabled = true;
   try { const created = await api("/api/sessions", "POST", {}); await selectSession(created.id, false); }

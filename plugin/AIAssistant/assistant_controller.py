@@ -32,6 +32,8 @@ def analysis_action(session, config):
     has_input = any(message["role"] == "user" and (message.get("text", "").strip() or message.get("file_ids")) for message in session.get("messages", []))
     if not has_input:
         return {}
+    if "Приложение перезапущено" in (session.get("task_map", {}).get("readiness", {}).get("reasons") or []):
+        return {"kind": "analyze", "title": "Нужно обновить анализ", "text": "После перезапуска нужно обновить анализ сцены и настроек. История чата сохранена.", "label": "Обновить анализ"}
     if state == "failed":
         return {"kind": "analyze", "title": "Анализ не завершён", "text": "Повторите анализ. Если ошибка связана с подключением, проверьте настройки LLM.", "label": "Повторить анализ", "settings": True}
     if state in ("cancelled", "interrupted"):
@@ -425,6 +427,8 @@ class AssistantController(QObject):
         kind = a["kind"]
         if kind == "answer":
             self.answer(a["session_id"], a["payload"])
+        elif kind == "analyze":
+            self.analyze()
         elif kind in ("input", "risk"):
             self.prompt = copy.deepcopy(a)
             self.prompt.setdefault("title", "Цель прототипа и принятие инженерного риска")

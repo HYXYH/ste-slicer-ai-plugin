@@ -594,6 +594,8 @@ class AssistantWindow(QWidget):
             self.select(sid)
         elif kind == "answer":
             self.answer(sid, action["payload"])
+        elif kind == "analyze":
+            self.analyze()
         elif kind == "input":
             value, ok = QInputDialog.getMultiLineText(self, action["title"], "Ваш ответ:")
             if ok and value.strip():

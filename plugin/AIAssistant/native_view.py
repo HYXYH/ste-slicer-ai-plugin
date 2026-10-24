@@ -183,7 +183,10 @@ def session_document(session, history=False, include_messages=True):
                                   doc.link("Принять", "answer", payload={"assumptions": [{"id": a["id"], "accepted": True}]}) +
                                   doc.link("Отклонить", "answer", payload={"assumptions": [{"id": a["id"], "accepted": False}]})))
     ready = task.get("readiness") or {}
-    limits = ready.get("reasons", []) + [u["reason"] for u in task.get("unknowns", []) if u.get("blocking") and not u.get("resolved")]
+    restarted = "Приложение перезапущено" in ready.get("reasons", [])
+    if restarted and include_messages and session["messages"] and not session.get("calibration_for"):
+        doc.parts.append(card("Нужно обновить анализ", paragraph("После перезапуска нужно обновить анализ сцены и настроек. История чата сохранена.") + doc.link("Обновить анализ", "analyze"), "#eaf4ff"))
+    limits = [reason for reason in ready.get("reasons", []) if reason != "Приложение перезапущено"] + [u["reason"] for u in task.get("unknowns", []) if u.get("blocking") and not u.get("resolved")]
     if limits:
         doc.parts.append(card("Ограничения", ''.join(paragraph(readable_text(v)) for v in limits), "#fff8e9"))
     for c in task.get("conflicts", []):

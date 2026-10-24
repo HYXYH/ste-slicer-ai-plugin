@@ -17,6 +17,7 @@ Rectangle {
     property bool details: false
     property int settingsVersion: -1
     property bool followTail: true
+    readonly property real navigationWidth: 94
     color: "#f1f7fb"
     implicitWidth: 1000
     implicitHeight: 720
@@ -55,8 +56,8 @@ Rectangle {
         Item {
             Layout.fillWidth: true
             implicitHeight: root.v.chats || root.v.analytics ? 48 : Math.max(64, chatHeading.height + 8)
-            Image { id:headerRobot; source:"Robot.svg"; width:45; height:45; anchors.left:parent.left; anchors.verticalCenter:parent.verticalCenter }
-            Text { visible:!!root.v.chats || !!root.v.analytics; anchors.left:headerRobot.right; anchors.leftMargin:10; anchors.verticalCenter:parent.verticalCenter; text:root.v.chats ? "Все чаты" : "Аналитика подготовки"; color:"#123858"; font.family:"Segoe UI"; font.pixelSize:root.v.chats ? 30 : 20; font.bold:true }
+            Image { id:headerRobot; source:"Robot.svg"; width:45; height:45; anchors.left:parent.left; anchors.leftMargin:(root.navigationWidth - width) / 2; anchors.verticalCenter:parent.verticalCenter }
+            Text { visible:!!root.v.chats || !!root.v.analytics; anchors.left:parent.left; anchors.leftMargin:root.navigationWidth + 12; anchors.verticalCenter:parent.verticalCenter; text:root.v.chats ? "Все чаты" : "Аналитика подготовки"; color:"#123858"; font.family:"Segoe UI"; font.pixelSize:root.v.chats ? 30 : 20; font.bold:true }
             Column {
                 id:chatHeading
                 visible:!root.v.chats && !root.v.analytics
@@ -109,7 +110,7 @@ Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true
             spacing: 12
             Rectangle {
-                Layout.preferredWidth: 94; Layout.minimumWidth: 94; Layout.maximumWidth: 94; Layout.fillHeight: true
+                Layout.preferredWidth: root.navigationWidth; Layout.minimumWidth: root.navigationWidth; Layout.maximumWidth: root.navigationWidth; Layout.fillHeight: true
                 color: "#fafcfe"; radius: 9
                 Column {
                     anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 12
@@ -263,16 +264,20 @@ Rectangle {
                                 AssistantButton { compact:true; text:"Убрать"; enabled:!root.v.busy; onClicked:root.backend.removeFile(modelData.id) }
                             }
                         }
-                        TextArea {
-                            id:composer; objectName:"composer"
+                        Flickable {
                             Layout.fillWidth:true; Layout.preferredHeight:70
-                            placeholderText:"Напишите сообщение для AI ассистента…"
-                            wrapMode:TextEdit.Wrap; selectByMouse:true
-                            enabled:!!root.v.sessionId && !root.v.busy
-                            font.family:"Segoe UI"; font.pixelSize:12; color:"#294864"
-                            background:Rectangle { color:"transparent" }
-                            onTextChanged:if(root.backend && text !== root.backend.draft) root.backend.setDraft(text)
-                            Keys.onReturnPressed: { if(event.modifiers & Qt.ControlModifier) { root.act("send"); event.accepted = true; } else event.accepted = false; }
+                            clip:true; boundsBehavior:Flickable.StopAtBounds
+                            TextArea.flickable: TextArea {
+                                id:composer; objectName:"composer"
+                                placeholderText:"Напишите сообщение для AI ассистента…"
+                                wrapMode:TextEdit.Wrap; selectByMouse:true; rightPadding:16
+                                enabled:!!root.v.sessionId && !root.v.busy
+                                font.family:"Segoe UI"; font.pixelSize:12; color:"#294864"
+                                background:Rectangle { color:"transparent" }
+                                onTextChanged:if(root.backend && text !== root.backend.draft) root.backend.setDraft(text)
+                                Keys.onReturnPressed: { if(event.modifiers & Qt.ControlModifier) { root.act("send"); event.accepted = true; } else event.accepted = false; }
+                            }
+                            ScrollBar.vertical: ScrollBar { policy:ScrollBar.AsNeeded }
                         }
                         RowLayout {
                             Layout.fillWidth:true

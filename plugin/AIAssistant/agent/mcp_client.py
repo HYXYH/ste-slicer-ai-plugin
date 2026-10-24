@@ -23,8 +23,9 @@ class MCPClient:
         if self.sid:
             headers.update({"Mcp-Session-Id": self.sid, "MCP-Protocol-Version": VERSION})
         request = Request(self.url, json.dumps(body, allow_nan=False).encode("utf-8"), headers)
+        exporting = method == "tools/call" and (params or {}).get("name") in ("save_project", "export_gcode")
         try:
-            with self.opener.open(request, timeout=35) as response:
+            with self.opener.open(request, timeout=310 if exporting else 35) as response:
                 self.sid = response.headers.get("Mcp-Session-Id", self.sid)
                 if notification:
                     return None

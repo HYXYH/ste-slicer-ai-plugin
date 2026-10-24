@@ -7,6 +7,7 @@ import time
 from collections import deque
 
 from .session import now, ApiError
+from .export_job import EXPORT_TOOLS
 
 log = logging.getLogger(__name__)
 MODE_NAMES = {"classic": "3D", "cylindrical": "5D Spiral", "cylindrical_full": "5D"}
@@ -54,6 +55,7 @@ def read_context(app):
 
 class SlicerBridge:
     IMPORT_TIMEOUT = 120
+    EXPORT_TIMEOUT = 300
 
     def __init__(self, app, store):
         from PyQt5.QtCore import QTimer
@@ -89,6 +91,8 @@ class SlicerBridge:
 
     def call(self, name, arguments, expected_ref=None):
         if threading.current_thread().ident == self.qt_thread:
+            if name in EXPORT_TOOLS:
+                raise ApiError("Сохранение должно выполняться через фоновую очередь", 409, "EXPORT_FAILED")
             return self.api.dispatch(name, arguments, expected_ref)
         command = {"name": name, "arguments": copy.deepcopy(arguments), "expected": expected_ref,
                    "done": threading.Event(), "abandoned": False}
@@ -96,17 +100,22 @@ class SlicerBridge:
             if self.closed:
                 raise ApiError("Слайсер закрывается", 409, "INTERRUPTED")
             self.commands.append(command)
-        if not command["done"].wait(300 if name == "choose_export_target" else 30):
+        timeout = self.EXPORT_TIMEOUT if name in EXPORT_TOOLS else 300 if name == "choose_export_target" else 30
+        if not command["done"].wait(timeout):
             with self.lock:
-                command["abandoned"] = True
-            raise ApiError("Слайсер не подтвердил операцию. Проверьте фактическую сцену.", 504, "TOOL_TIMEOUT")
+                if not command["done"].is_set():
+                    command["abandoned"] = True
+                    raise ApiError("Слайсер не подтвердил операцию. Проверьте фактическую сцену.", 504, "TOOL_TIMEOUT")
         if "error" in command:
             raise command["error"]
         return command["result"]
 
     def post(self, callback):
         with self.lock:
+            if self.closed:
+                return False
             self.callbacks.append(callback)
+            return True
 
     def _commands(self):
         with self.lock:
@@ -124,17 +133,23 @@ class SlicerBridge:
             if time.monotonic() >= deadline:
                 break
         if command:
+            deferred = False
             try:
                 if command["abandoned"]:
                     return
-                command["result"] = self.api.dispatch(command["name"], command["arguments"], command["expected"])
+                if command["name"] in EXPORT_TOOLS:
+                    self.api.start_export(command)
+                    deferred = True
+                else:
+                    command["result"] = self.api.dispatch(command["name"], command["arguments"], command["expected"])
             except ApiError as error:
                 command["error"] = error
             except Exception:
                 log.exception("Assistant Qt command failed")
                 command["error"] = ApiError("Ошибка API STE Slicer. Проверьте журнал приложения.", 409, "SLICER_API_ERROR")
             finally:
-                command["done"].set()
+                if not deferred:
+                    command["done"].set()
 
     def _nodes(self):
         from UM.Scene.Iterator.DepthFirstIterator import DepthFirstIterator
@@ -153,7 +168,8 @@ class SlicerBridge:
         try:
             self.store.reconcile_scene(set(str(id(n)) for n in self._nodes()))
             # Completion always takes a fresh snapshot. Passive polling must not compete with slicing.
-            if self.app.getGlobalContainerStack() is not None and not self.api.slice_active and self.ticks % 40 == 0:
+            if (self.app.getGlobalContainerStack() is not None and not self.api.slice_active
+                    and not getattr(self.api, "export_active", None) and self.ticks % 40 == 0):
                 self.store.invalidate_snapshot(self.api.get_scene_snapshot()["snapshot_ref"])
         except Exception:
             log.exception("Cannot reconcile scene")
@@ -168,7 +184,7 @@ class SlicerBridge:
                 self._refresh()
             if self.active:
                 self._check_import()
-            if self.active is None:
+            if self.active is None and self.api.export_active is None:
                 with self.lock:
                     operation = self.queue.popleft() if self.queue else None
                 if operation:
@@ -221,6 +237,8 @@ class SlicerBridge:
                 command["error"] = ApiError("Приложение закрыто", 409, "INTERRUPTED")
                 command["done"].set()
             self.commands.clear()
+            if self.api.export_active is not None:
+                self.api.export_active.interrupt()
         self.timer.stop()
 
 

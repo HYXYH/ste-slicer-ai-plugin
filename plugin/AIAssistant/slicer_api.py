@@ -3,10 +3,8 @@ import hashlib
 import json
 import math
 import os
-import tempfile
 import threading
 import time
-import zipfile
 
 from .session import ApiError, uid, now
 from .agent.contracts import fail
@@ -40,6 +38,7 @@ class SlicerAPI:
     def __init__(self, bridge):
         self.bridge, self.app, self.store = bridge, bridge.app, bridge.store
         self.exports, self.jobs, self.slice_active = {}, {}, None
+        self.export_active = None
         self.progress_lock, self.pending_progress = threading.Lock(), {}
 
     def stack(self, target=None):
@@ -475,49 +474,16 @@ class SlicerAPI:
         self.exports[target_id] = {"session_id": session_id, "path": os.path.realpath(path), "overwrite": overwrite}
         return {"export_target_id": target_id, "folder_name": os.path.basename(path), "overwrite": overwrite}
 
-    def write_output(self, kind, session_id, export_target_id):
-        target = self.exports.get(export_target_id)
-        if not target or target["session_id"] != session_id:
-            fail("Выберите папку экспорта", "EXPORT_FAILED", 409)
-        filename = "project.3mf" if kind == "save_project" else "result.gcode"
-        destination = os.path.join(target["path"], filename)
-        if os.path.lexists(destination) and not target["overwrite"]:
-            fail("Файл уже существует. Подтвердите замену в интерфейсе.", "EXPORT_EXISTS", 409)
-        handler = self.app.getWorkspaceFileHandler() if kind == "save_project" else self.app.getMeshFileHandler()
-        writer = handler.getWriter("3MFWriter" if kind == "save_project" else "GCodeWriter")
-        if writer is None:
-            fail("Штатный экспортёр недоступен", "EXPORT_FAILED", 409)
-        descriptor, temporary = tempfile.mkstemp(prefix=".assistant-", suffix=".tmp", dir=target["path"])
-        os.close(descriptor)
+    def start_export(self, command):
+        from .export_job import NativeExport
+        if self.export_active is not None or self.slice_active is not None or self.bridge.active is not None:
+            fail("Дождитесь завершения текущей операции слайсера", "BUSY", 409)
+        self.export_active = NativeExport(self, command)
         try:
-            binary = kind == "save_project"
-            if binary:
-                with open(temporary, "wb") as stream:
-                    success = writer.write(stream, [self.app.getController().getScene().getRoot()], writer.OutputMode.BinaryMode)
-            else:
-                with open(temporary, "w", encoding="utf-8", newline="\n") as stream:
-                    success = writer.write(stream, list(self.nodes().values()), writer.OutputMode.TextMode)
-            if success is False or not os.path.getsize(temporary):
-                fail("Экспортёр не записал результат", "EXPORT_FAILED", 409)
-            if binary:
-                with zipfile.ZipFile(temporary) as archive:
-                    if archive.testzip() is not None or not any(n.endswith(".model") for n in archive.namelist()):
-                        fail("Записанный 3MF не читается", "EXPORT_FAILED", 409)
-            if target["overwrite"]:
-                os.replace(temporary, destination)
-            else:
-                # On Windows rename refuses to replace an existing destination.
-                if os.name == "nt":
-                    os.rename(temporary, destination)
-                else:
-                    os.link(temporary, destination)
-                    os.unlink(temporary)
-            return {"filename": filename, "size": os.path.getsize(destination), "written": True}
-        except OSError:
-            fail("Не удалось записать файл. Проверьте права и свободное место.", "EXPORT_FAILED", 409)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+            self.export_active.start()
+        except Exception:
+            self.export_active = None
+            raise
 
     def preferences(self, values=None):
         preferences = self.app.getPreferences()
@@ -533,7 +499,7 @@ class SlicerAPI:
         if expected_ref and self.get_scene_snapshot()["snapshot_ref"] != expected_ref:
             fail("Сцена изменилась перед выполнением действия", "STALE_INPUT", 409)
         if name == "save_project" or name == "export_gcode":
-            result = self.write_output(name, **arguments)
+            fail("Сохранение должно выполняться через штатный WriteFileJob", "EXPORT_FAILED", 409)
         else:
             method = getattr(self, name, None)
             if method is None or name.startswith("_"):

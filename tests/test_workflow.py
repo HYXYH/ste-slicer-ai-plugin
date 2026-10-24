@@ -806,41 +806,15 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(done.is_set())
         bridge.api.dispatch.assert_not_called()
 
-    def test_native_writer_adapter_checks_zip_and_refuses_overwrite(self):
+    def test_native_writers_cannot_be_dispatched_synchronously_on_qt(self):
         from AIAssistant.slicer_api import SlicerAPI
-        class Writer:
-            class OutputMode:
-                BinaryMode, TextMode = 1, 2
-            def write(self, stream, nodes, mode):
-                if mode == self.OutputMode.BinaryMode:
-                    with zipfile.ZipFile(stream, "w") as archive:
-                        archive.writestr("3D/3dmodel.model", "<model/>")
-                else:
-                    stream.write(";TEST WRITER ONLY\nG0 X1\n")
-                return True
-        with tempfile.TemporaryDirectory() as root:
-            bridge = mock.Mock()
-            bridge.store = SessionStore(root)
-            bridge._nodes.return_value = []
-            bridge.app.getWorkspaceFileHandler.return_value.getWriter.return_value = Writer()
-            bridge.app.getMeshFileHandler.return_value.getWriter.return_value = Writer()
-            api = SlicerAPI(bridge)
-            api.exports["target"] = {"session_id": "sid", "path": root, "overwrite": False}
-            self.assertTrue(api.write_output("save_project", "sid", "target")["written"])
-            self.assertTrue(api.write_output("export_gcode", "sid", "target")["written"])
-            with self.assertRaises(ApiError) as caught:
-                api.write_output("save_project", "sid", "target")
-            self.assertEqual(caught.exception.code, "EXPORT_EXISTS")
+        bridge = mock.Mock()
+        api = SlicerAPI(bridge)
+        for name in ("save_project", "export_gcode"):
             with self.assertRaises(ApiError):
-                api.write_output("export_gcode", "different-session", "target")
-            with zipfile.ZipFile(os.path.join(root, "project.3mf")) as archive:
-                self.assertIn("3D/3dmodel.model", archive.namelist())
-            api.exports["target"]["overwrite"] = True
-            self.assertTrue(api.write_output("save_project", "sid", "target")["written"])
-            bridge.app.getWorkspaceFileHandler.return_value.getWriter.return_value.write = mock.Mock(side_effect=OSError("Test write failure"))
-            with self.assertRaises(ApiError) as caught:
-                api.write_output("save_project", "sid", "target")
-            self.assertEqual(caught.exception.code, "EXPORT_FAILED")
+                api.dispatch(name, {"session_id": "sid", "export_target_id": "target"})
+        bridge.app.getWorkspaceFileHandler.assert_not_called()
+        bridge.app.getMeshFileHandler.assert_not_called()
 
 
 if __name__ == "__main__":

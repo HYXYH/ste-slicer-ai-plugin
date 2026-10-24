@@ -58,9 +58,6 @@ Rectangle {
                 Text { text: root.v.analytics ? "Аналитика подготовки" : "AI Print Assistant"; color: "#123858"; font.family: "Segoe UI"; font.pixelSize: 20; font.bold: true }
                 Text { Layout.fillWidth: true; text: root.v.title || "Опишите задачу — ассистент подберёт параметры печати"; color: "#7d8e9f"; font.pixelSize: 11; elide: Text.ElideRight }
             }
-            AssistantButton { text: "Все чаты"; onClicked: { root.selectedChats = []; root.modal = "chats"; } }
-            AssistantButton { text: root.v.analytics ? "К чату" : "Аналитика"; onClicked: root.v.analytics ? root.act("chat") : root.backend.loadAnalytics(30) }
-            AssistantButton { text: "LLM"; implicitWidth: 55; onClicked: { root.modal = "settings"; root.fillSettings(); root.act("loadSettings"); } }
             AssistantButton { visible: root.width < 850 && !root.v.analytics; text: root.details ? "Чат" : "Параметры"; onClicked: root.details = !root.details }
         }
         Rectangle {
@@ -71,27 +68,35 @@ Rectangle {
             Text { id: noticeText; anchors.fill: parent; anchors.margins: 10; text: root.v.notice || ""; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: "#96532c"; font.pixelSize: 12 }
         }
         RowLayout {
-            visible: !root.v.analytics
             Layout.fillWidth: true; Layout.fillHeight: true
             spacing: 12
             Rectangle {
-                visible: root.width >= 1000
-                Layout.preferredWidth: 94; Layout.fillHeight: true
+                Layout.preferredWidth: 94; Layout.minimumWidth: 94; Layout.maximumWidth: 94; Layout.fillHeight: true
                 color: "#fafcfe"; radius: 9
                 Column {
                     anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 12
-                    spacing: 22
+                    spacing: 12
                     Repeater {
-                        model: [{title:"Задача",note:"Описание и модель"}, {title:"Анализ",note:"Требования и проверки"}, {title:"План",note:"Параметры и согласие"}, {title:"Слайсинг",note:"Расчёт G-code"}, {title:"Файлы",note:"3MF и G-code"}]
-                        Column {
-                            width: parent.width; spacing: 6
-                            Rectangle { width: 27; height: 27; radius: 14; color: index <= (root.v.step || 0) ? "#008bd6" : "#d3dce5"; Text { anchors.centerIn: parent; text: index + 1; color:"white"; font.pixelSize: 12; font.bold:true } }
-                            Text { text:modelData.title; color:index === root.v.step ? "#087eb9" : "#40566d"; font.pixelSize:12; font.bold:true }
-                            Text { width:parent.width; text:modelData.note; wrapMode:Text.Wrap; color:"#8795a4"; font.pixelSize:10 }
+                        model: [{title:"Новый чат",icon:"NewChat.svg",action:"new"}, {title:"Все чаты",icon:"Chats.svg",action:"chats"}, {title:"LLM",icon:"Settings.svg",action:"settings"}, {title:root.v.analytics ? "Назад" : "Аналитика",icon:root.v.analytics ? "Back.svg" : "Analytics.svg",action:"analytics"}]
+                        AssistantNavButton {
+                            width: parent.width
+                            text: modelData.title
+                            iconSource: "icons/" + modelData.icon
+                            onClicked: {
+                                if (modelData.action === "new") { root.modal=""; root.act("newChat"); }
+                                else if (modelData.action === "chats") { root.selectedChats=[]; root.modal="chats"; }
+                                else if (modelData.action === "settings") { root.modal="settings"; root.fillSettings(); root.act("loadSettings"); }
+                                else if (root.v.analytics) root.act("chat");
+                                else if (root.backend) root.backend.loadAnalytics(30);
+                            }
                         }
                     }
                 }
             }
+            Item {
+                Layout.fillWidth:true; Layout.fillHeight:true
+                RowLayout {
+                    anchors.fill:parent; visible:!root.v.analytics; spacing:12
             ColumnLayout {
                 visible: root.width >= 850 || !root.details
                 Layout.fillWidth: true; Layout.fillHeight: true
@@ -325,7 +330,7 @@ Rectangle {
         }
         ColumnLayout {
             visible:!!root.v.analytics
-            Layout.fillWidth:true; Layout.fillHeight:true; spacing:10
+            anchors.fill:parent; spacing:10
             RowLayout {
                 Layout.fillWidth:true
                 ComboBox { id:reportDays; model:["7 дней","30 дней","Всё время"]; currentIndex:1; onActivated:root.backend.loadAnalytics([7,30,0][currentIndex]) }
@@ -341,6 +346,8 @@ Rectangle {
                 boundsBehavior:Flickable.StopAtBounds
                 ScrollBar.vertical:ScrollBar {}
                 TextEdit { id:analyticsDoc; width:analyticsScroll.width - 12; height:contentHeight; text:root.v.report || "Загружаем аналитику…"; readOnly:true; selectByMouse:true; textFormat:TextEdit.RichText; wrapMode:TextEdit.Wrap; onLinkActivated:root.backend.invokeReportLink(link) }
+            }
+        }
             }
         }
     }

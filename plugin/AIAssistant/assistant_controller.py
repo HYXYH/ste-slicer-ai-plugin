@@ -16,6 +16,33 @@ from .analytics_view import analytics_projection
 PARAMETERS = {key: label for key, (label, unit) in SETTINGS.items()}
 
 
+def analysis_action(session, config):
+    if not session or session.get("calibration_for"):
+        return {}
+    state = session.get("workflow_state", "idle")
+    runs = session.get("runs", {})
+    if any(run["status"] in ("queued", "running") for run in runs.values()) or state in (
+            "applying", "slicing", "exporting", "importing", "waiting_import"):
+        return {}
+    missing = [label for key, label in (("base_url", "адрес сервера"), ("model", "модель")) if not config.get(key, "").strip()]
+    if not config.get("key_configured"):
+        missing.append("ключ API")
+    if missing:
+        return {"kind": "settings", "title": "Нужно настроить LLM", "text": "Не указаны: " + ", ".join(missing) + ".", "label": "Настроить LLM"}
+    has_input = any(message["role"] == "user" and (message.get("text", "").strip() or message.get("file_ids")) for message in session.get("messages", []))
+    if not has_input:
+        return {}
+    if state == "failed":
+        return {"kind": "analyze", "title": "Анализ не завершён", "text": "Повторите анализ. Если ошибка связана с подключением, проверьте настройки LLM.", "label": "Повторить анализ", "settings": True}
+    if state in ("cancelled", "interrupted"):
+        return {"kind": "analyze", "title": "Анализ прерван", "text": "Новый запуск обработает сохранённые данные задачи.", "label": "Продолжить анализ"}
+    if state == "stale":
+        return {"kind": "analyze", "title": "Данные анализа устарели", "text": "Сцена или настройки изменились. Обновите анализ перед применением плана.", "label": "Обновить анализ"}
+    if not runs:
+        return {"kind": "analyze", "title": "Задача готова к анализу", "text": "Сообщения и вложения сохранены.", "label": "Начать анализ"}
+    return {}
+
+
 class AssistantController(QObject):
     changed = pyqtSignal()
     draftChanged = pyqtSignal()
@@ -202,9 +229,12 @@ class AssistantController(QObject):
                     params.extend({"name": PARAMETERS.get(c["key"], field_label(c["key"])), "value": human(c["value"]) + (" " + SETTINGS[c["key"]][1] if c["key"] in SETTINGS and SETTINGS[c["key"]][1] else "")} for c in action["arguments"]["changes"])
         runs = session.get("runs", {})
         state = session.get("workflow_state", "idle")
+        cube_plan_needed = bool(session.get("calibration_for")) and not any(p["status"] in ("validated", "approved", "applying", "applied") for p in plans) and state not in ("applying", "slicing", "exporting", "waiting_import")
         step = 0 if not messages else 1 if state in ("idle", "analyzing", "waiting_user", "queued", "failed") else 2 if state == "plan_ready" else 3 if state in ("applying", "slicing", "result_ready") else 4
         report, self.analytics_actions = analytics_document(self.report, self.report_search, self.report_filter) if self.report else ("", {})
         view = {"sessionId": self.current or "", "title": session.get("title", "AI Print Assistant"), "sessions": self.listing,
+                      "updatedAt": session.get("updated_at", ""), "analysisAction": analysis_action(session, self.server.settings.public()),
+                      "cubePlanNeeded": cube_plan_needed, "cubeModelReady": any(f.get("kind") == "model" and f.get("status") == "imported" and f.get("scene_present") for f in session.get("files", {}).values()),
                       "messages": messages, "workflow": workflow, "status": FLOW.get(state, state), "state": state, "step": step,
                       "busy": self.current in self.busy, "active": any(r["status"] in ("queued", "running") for r in runs.values()),
                       "pending": [session["files"][fid] for fid in self.draft_for(self.current)["files"] if fid in session.get("files", {})] if self.current else [],

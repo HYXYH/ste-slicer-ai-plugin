@@ -12,6 +12,8 @@ Rectangle {
     property var selectedChats: []
     property string deleteChatId: ""
     property string deleteChatTitle: ""
+    property string editingTitleSession: ""
+    property string titleDraft: ""
     property bool details: false
     property int settingsVersion: -1
     property bool followTail: true
@@ -50,17 +52,51 @@ Rectangle {
         anchors.fill: parent
         anchors.margins: 14
         spacing: 12
-        RowLayout {
+        Item {
             Layout.fillWidth: true
-            spacing: 10
-            Image { source: "Robot.svg"; Layout.preferredWidth: 45; Layout.preferredHeight: 45 }
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 3
-                Text { text: root.v.chats ? "Все чаты" : root.v.analytics ? "Аналитика подготовки" : "AI Print Assistant"; color: "#123858"; font.family: "Segoe UI"; font.pixelSize: root.v.chats ? 30 : 20; font.bold: true }
-                Text { visible:!root.v.chats && !root.v.analytics; Layout.fillWidth: true; text: root.v.title || "Опишите задачу — ассистент подберёт параметры печати"; color: "#7d8e9f"; font.pixelSize: 11; elide: Text.ElideRight }
+            implicitHeight: root.v.chats || root.v.analytics ? 48 : Math.max(64, chatHeading.height + 8)
+            Image { id:headerRobot; source:"Robot.svg"; width:45; height:45; anchors.left:parent.left; anchors.verticalCenter:parent.verticalCenter }
+            Text { visible:!!root.v.chats || !!root.v.analytics; anchors.left:headerRobot.right; anchors.leftMargin:10; anchors.verticalCenter:parent.verticalCenter; text:root.v.chats ? "Все чаты" : "Аналитика подготовки"; color:"#123858"; font.family:"Segoe UI"; font.pixelSize:root.v.chats ? 30 : 20; font.bold:true }
+            Column {
+                id:chatHeading
+                visible:!root.v.chats && !root.v.analytics
+                anchors.centerIn:parent; width:Math.max(120,parent.width - (root.width < 850 ? 230 : 120)); spacing:6
+                Item {
+                    width:parent.width; height:root.editingTitleSession && root.editingTitleSession === root.v.sessionId ? 36 : titleRow.height
+                    Row {
+                        id:titleRow
+                        visible:!(root.editingTitleSession && root.editingTitleSession === root.v.sessionId)
+                        anchors.horizontalCenter:parent.horizontalCenter
+                        width:Math.min(chatTitle.implicitWidth + 36,parent.width); spacing:8
+                        height:Math.max(30,chatTitle.implicitHeight)
+                        Text { id:chatTitle; width:parent.width - 36; anchors.verticalCenter:parent.verticalCenter; text:root.v.title || "Новая задача"; textFormat:Text.PlainText; horizontalAlignment:Text.AlignHCenter; wrapMode:Text.Wrap; maximumLineCount:2; elide:Text.ElideRight; font.family:"Segoe UI"; font.pixelSize:18; font.bold:true; color:"#123858" }
+                        Button {
+                            width:28; height:28; anchors.verticalCenter:parent.verticalCenter
+                            enabled:!!root.v.sessionId; hoverEnabled:true
+                            contentItem:Image { source:"icons/Edit.svg"; fillMode:Image.PreserveAspectFit; sourceSize.width:16; sourceSize.height:16 }
+                            padding:6; background:Rectangle { radius:5; color:parent.hovered ? "#e3f1ff" : "transparent" }
+                            ToolTip.visible:hovered; ToolTip.text:"Редактировать название"
+                            onClicked: { root.titleDraft=root.v.title || ""; root.editingTitleSession=root.v.sessionId; titleInput.forceActiveFocus(); titleInput.selectAll(); }
+                        }
+                    }
+                    TextField {
+                        id:titleInput
+                        visible:!!root.editingTitleSession && root.editingTitleSession === root.v.sessionId
+                        anchors.centerIn:parent; width:Math.min(parent.width,720); height:36
+                        text:root.titleDraft; maximumLength:120; selectByMouse:true; horizontalAlignment:TextInput.AlignHCenter; font.pixelSize:16
+                        onTextChanged:if(visible && text !== root.titleDraft) root.titleDraft=text
+                        onAccepted:if(text.trim().length && root.backend) { root.backend.rename(text.trim()); root.editingTitleSession=""; }
+                        Keys.onEscapePressed:root.editingTitleSession=""
+                        ToolTip.visible:activeFocus; ToolTip.delay:700; ToolTip.text:"Enter — сохранить, Escape — отменить"
+                    }
+                }
+                Text {
+                    width:parent.width; horizontalAlignment:Text.AlignHCenter; elide:Text.ElideRight; font.pixelSize:10; color:"#7d8e9f"
+                    textFormat:Text.RichText
+                    text:'<font color="' + (root.v.state === "failed" ? "#dd715b" : root.v.active ? "#168bd1" : root.v.state === "waiting_user" ? "#e8aa32" : "#40b987") + '">●</font> ' + (root.v.status || "Подключение…") + (root.v.updatedAt ? " · Последнее изменение: " + Qt.formatDateTime(new Date(root.v.updatedAt),"dd.MM.yyyy, HH:mm") : "")
+                }
             }
-            AssistantButton { visible: root.width < 850 && !root.v.analytics && !root.v.chats; text: root.details ? "Чат" : "Параметры"; onClicked: root.details = !root.details }
+            AssistantButton { anchors.right:parent.right; anchors.verticalCenter:parent.verticalCenter; visible: root.width < 850 && !root.v.analytics && !root.v.chats; text: root.details ? "Чат" : "Параметры"; onClicked: root.details = !root.details }
         }
         Rectangle {
             visible: (root.v.notice || "") !== ""
@@ -103,14 +139,6 @@ Rectangle {
                 visible: root.width >= 850 || !root.details
                 Layout.fillWidth: true; Layout.fillHeight: true
                 spacing: 8
-                RowLayout {
-                    Layout.fillWidth:true
-                    Rectangle { width:7; height:7; radius:4; color:root.v.active ? "#f0b442" : "#40b987" }
-                    Text { Layout.fillWidth:true; text:root.v.status || "Подключение…"; color:"#748a9c"; font.pixelSize:11; elide:Text.ElideRight }
-                    Text { visible:root.v.state === "slicing"; text:root.backend && root.backend.sliceProgress >= 0 ? Math.round(root.backend.sliceProgress * 100) + "%" : "Проверка настроек…"; color:"#1683c7"; font.pixelSize:11 }
-                    AssistantButton { compact:true; text:root.assessment.score === undefined ? "Готовность данных…" : "Готовность данных " + root.assessment.score + "/100"; onClicked: { root.details=true; rightPane.contentY=assessmentCard.y; } }
-                    AssistantButton { compact:true; text:root.v.active ? "Остановить" : (root.v.calibrationFor || {}).session_id ? "Подготовить план куба" : "Повторить анализ"; enabled:!!root.v.sessionId && !root.v.busy; onClicked:root.v.active ? root.act("cancel") : root.act("analyze") }
-                }
                 ProgressBar { visible:root.v.state === "slicing"; Layout.fillWidth:true; indeterminate:!root.backend || root.backend.sliceProgress < 0; value:root.backend && root.backend.sliceProgress >= 0 ? root.backend.sliceProgress : 0 }
                 Flickable {
                     id:conversation
@@ -206,6 +234,18 @@ Rectangle {
                             textFormat:TextEdit.RichText; readOnly:true; selectByMouse:true; wrapMode:TextEdit.Wrap
                             color:"#2d4862"; font.family:"Segoe UI"; font.pixelSize:12
                             onLinkActivated:root.backend.invokeLink(link)
+                        }
+                        AssistantButton { visible:!!root.v.active; text:"Остановить"; compact:true; enabled:!root.v.busy; onClicked:root.act("cancel") }
+                        AssistantCard {
+                            property var recovery:root.v.analysisAction || ({})
+                            visible:!!recovery.kind
+                            width:parent.width; title:recovery.title || ""
+                            Text { Layout.fillWidth:true; text:root.v.analysisAction ? root.v.analysisAction.text : ""; textFormat:Text.PlainText; wrapMode:Text.Wrap; color:"#75899c"; font.pixelSize:12 }
+                            Row {
+                                spacing:8
+                                AssistantButton { text:(root.v.analysisAction || {}).label || ""; primary:true; enabled:!!root.v.sessionId && !root.v.busy; onClicked: { if((root.v.analysisAction || {}).kind === "settings") { root.modal="settings"; root.fillSettings(); root.act("loadSettings"); } else root.act("analyze"); } }
+                                AssistantButton { visible:!!(root.v.analysisAction || {}).settings; text:"Настройки LLM"; onClicked: { root.modal="settings"; root.fillSettings(); root.act("loadSettings"); } }
+                            }
                         }
                     }
                 }
@@ -323,6 +363,7 @@ Rectangle {
                             }
                         }
                         Text { Layout.fillWidth:true; text:"Изменения параметров задавайте в чате. Применение — после согласования плана."; color:"#8b9dab"; wrapMode:Text.Wrap; font.pixelSize:10 }
+                        AssistantButton { visible:!!root.v.cubePlanNeeded; Layout.fillWidth:true; text:"Подготовить план куба"; primary:true; enabled:!!root.v.cubeModelReady && !!root.assessment.process_signature && !root.v.busy; onClicked:root.act("analyze") }
                         AssistantButton { Layout.fillWidth:true; text:"✓  Применить и рассчитать"; primary:true; enabled:!!root.v.planId && !root.v.busy && root.assessment.status !== "conflict"; onClicked:root.act("applyPlan") }
                         AssistantButton { visible:root.assessment.recommend_calibration === true; Layout.fillWidth:true; text:"Провести калибровку"; primary:true; enabled:!!root.assessment.process_signature; onClicked:root.modal = "calibration" }
                         AssistantButton { visible:!!(root.v.calibrationFor || {}).session_id; Layout.fillWidth:true; text:"Ввести измерения куба"; onClicked:root.modal = "measurements" }

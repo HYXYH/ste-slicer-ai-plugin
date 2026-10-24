@@ -8,6 +8,7 @@ import time
 from ..session import ApiError, uid, now
 from ..documents import task_input
 from ..task_data import field_for, set_answer, reconcile_answers
+from ..user_view import readable_text
 from .contracts import strict_json, fail, validate, obj, ID, TEXT, array
 from .llm_client import LLMClient, image_content, endpoint, HTTP_TIMEOUT
 from .mcp_client import MCPClient
@@ -380,6 +381,9 @@ class Runner:
                                        ", риск принят пользователем." if updated["readiness"].get("accepted_risk_ids") else "") +
                                       ("" if state == "plan_ready" or not updated.get("recommended_settings") else "\n\nНастройки слайсера под задачу:\n" + describe(updated["recommended_settings"])),
                                       "file_ids": []})
+                if updated["requirements"] and (waiting == "requirements" or not stepwise):
+                    s["messages"][-1]["requirements_card"] = {"rows": copy.deepcopy(updated["requirements"] + updated["constraints"]),
+                                                               "conflicts": copy.deepcopy(updated["conflicts"])}
             self.store.edit(sid, finish)
             self.store.event(sid, rid, "run_finished", state=state)
         except Exception as exc:
@@ -437,7 +441,7 @@ class Runner:
                 field = field_for(question["field"])
                 if field:
                     set_answer(session, field, answer["value"], message_id)
-                texts.append(question["text"] + " " + answer["value"])
+                texts.append(readable_text(question["text"]) + " " + answer["value"])
                 if answer["value"].strip().lower() not in ("не знаю", "unknown"):
                     for unknown in task["unknowns"]:
                         if unknown["field"] == question["field"]:

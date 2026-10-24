@@ -1,5 +1,6 @@
 """Conversation-local action groups, with bounded summaries and lazy full details."""
 import json
+from .user_view import display_message
 
 LABELS = {"get_scene_snapshot": "Прочитана сцена и размеры", "get_printer_capabilities": "Проверены возможности принтера",
           "get_current_configuration": "Прочитаны текущие настройки", "list_materials": "Прочитан каталог материалов",
@@ -66,7 +67,7 @@ def conversation_timeline(session):
         run = session.get("runs", {}).get(event.get("run_id"), {})
         if row["status"] == "tool_started" and run.get("status") in ("cancelled", "failed", "interrupted", "completed"):
             row["status"] = "interrupted"
-    entries = [(m.get("created_at", ""), 1, i, dict(m, type="message")) for i, m in enumerate(session.get("messages", []))]
+    entries = [(m.get("created_at", ""), 1, i, dict(display_message(session, m), type="message")) for i, m in enumerate(session.get("messages", []))]
     entries += [(row["created_at"], 0, row["order"], row) for row in operations.values()]
     entries.sort(key=lambda item: item[:3])
     timeline = []

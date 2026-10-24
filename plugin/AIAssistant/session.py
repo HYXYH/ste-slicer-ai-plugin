@@ -28,7 +28,7 @@ def workspace_view(session):
     """A display projection; complete source evidence remains in the normal API and history."""
     result = {key: session[key] for key in ("id", "title", "revision", "updated_at", "workflow_state", "task", "plans", "operations", "exports", "calibration_for", "calibration_results", "calibration_process") if key in session}
     result["files"] = {fid: {key: value for key, value in row.items() if key not in ("path", "document_text")} for fid, row in session["files"].items()}
-    result["messages"] = [{key: row[key] for key in ("id", "role", "text", "created_at", "file_ids", "run_id", "origin") if key in row} for row in session["messages"]]
+    result["messages"] = [{key: row[key] for key in ("id", "role", "text", "created_at", "file_ids", "run_id", "origin", "requirements_card") if key in row} for row in session["messages"]]
     result["runs"] = {rid: {key: row[key] for key in ("id", "status", "created_at", "finished_at", "error") if key in row} for rid, row in session["runs"].items()}
     task = {key: value for key, value in session["task_map"].items() if key != "resources"}
     task["facts"] = [dict(fact, value={"objects": [{key: row[key] for key in ("id", "name", "dimensions_mm", "printable", "file_refs") if key in row} for row in fact["value"].get("objects", [])]})
@@ -38,6 +38,8 @@ def workspace_view(session):
                              has_details=bool(row.get("arguments") or row.get("result"))) for row in session["events"]]
     from .activity import conversation_timeline
     result["timeline"] = conversation_timeline(session)
+    from .user_view import labels_for_task
+    result["field_labels"] = labels_for_task(session["task_map"])
     return copy.deepcopy(result)
 
 
@@ -160,6 +162,8 @@ class SessionStore:
             result = copy.deepcopy(original)
             from .activity import conversation_timeline
             result["timeline"] = conversation_timeline(original)
+            from .user_view import labels_for_task
+            result["field_labels"] = labels_for_task(original["task_map"])
             result.pop("requests")
             result.pop("workflow_requests", None)
             result.pop("action_results", None)

@@ -2,6 +2,7 @@
 import html
 import json
 from .activity import conversation_timeline
+from .user_view import field_label, readable_text
 
 
 FLOW = {"idle": "Готов к работе", "queued": "Анализ в очереди", "waiting_import": "Ожидание импорта",
@@ -31,7 +32,7 @@ def setting_changes(action):
     before = {identity(row): row.get("value") for row in previous if isinstance(row, dict) and "key" in row}
     rows = []
     for row in action.get("arguments", {}).get("changes", []):
-        label, unit = SETTINGS.get(row["key"], (row["key"], ""))
+        label, unit = SETTINGS.get(row["key"], (field_label(row["key"]), ""))
         old, new = before.get(identity(row)), row["value"]
         def display(value):
             if value is None:
@@ -94,7 +95,8 @@ def session_document(session, history=False, include_messages=True):
     if include_messages and not session["messages"]:
         doc.parts.append(card("Начните с детали и её задачи", paragraph("Прикрепите 3D-модель и опишите, для чего нужна деталь.") +
                               paragraph("Ассистент уточнит требования, подготовит план и поможет сохранить проект и G-code.", True), "#eaf1ff"))
-    for message in conversation_timeline(session) if include_messages else []:
+    timeline = conversation_timeline(session)
+    for message in timeline if include_messages else []:
         if message["type"] == "activity":
             expanded = history is True or isinstance(history, set) and message["id"] in history
             body = doc.link(("▾ " if expanded else "▸ ") + message["summary"], "history", group_id=message["id"])
@@ -110,6 +112,17 @@ def session_document(session, history=False, include_messages=True):
             continue
         role = {"user": "Вы", "assistant": "Ассистент", "system": "Система"}.get(message["role"], "Сообщение")
         body = paragraph(message.get("text") or "")
+        if message.get("requirements"):
+            requirements = message["requirements"]
+            group_id = "requirements:" + message.get("id", "")
+            expanded = history is True or isinstance(history, set) and group_id in history
+            rows = requirements["primary"] + (requirements["secondary"] if expanded else [])
+            details = ''.join(paragraph(("⚠ " if row["warning"] else "• ") + row["label"] + ": " + row["value"]) for row in rows)
+            details += ''.join(paragraph("⚠ " + warning) for warning in requirements["warnings"])
+            if requirements["secondary"]:
+                details += doc.link("Свернуть требования" if expanded else "Ещё {} требований".format(len(requirements["secondary"])), "history", group_id=group_id)
+            details += doc.link("Исходные поля и источники", "requirements", message_id=message.get("id", ""))
+            body += card("Распознаны требования · " + str(requirements["count"]), details, "#f4f9ff")
         for fid in message.get("file_ids", []):
             f = session["files"].get(fid)
             if not f:
@@ -140,11 +153,11 @@ def session_document(session, history=False, include_messages=True):
             doc.parts.append(card("Работа остановлена", paragraph(error["message"]), "#fff1e9"))
     rec = task.get("recommended_settings") or {}
     if rec.get("settings") and (include_messages or history):
-        rows = [[text(s["key"]), text(human(s["value"]) + (" " + s["unit"] if s.get("unit") else "")), text(s.get("reason", ""))] for s in rec["settings"]]
+        rows = [[text(field_label(s["key"])), text(human(s["value"]) + (" " + s["unit"] if s.get("unit") else "")), text(readable_text(s.get("reason", "")))] for s in rec["settings"]]
         doc.parts.append(card("Настройки слайсера под задачу", paragraph("Материал: " + human(rec.get("material"))) +
                               table(["Параметр", "Значение", "Основание"], rows) + ''.join(paragraph(w) for w in rec.get("warnings", [])) +
                               paragraph("Источники: " + ", ".join(rec.get("source_ids", [])), True)))
-    known = [paragraph(r["key"] + ": " + human(r["value"]) + (" " + r["unit"] if r.get("unit") else "")) for r in task.get("requirements", []) + task.get("constraints", [])]
+    known = [] if any(m.get("requirements") for m in timeline) else [paragraph(field_label(r["key"]) + ": " + human(r["value"]) + (" " + r["unit"] if r.get("unit") else "")) for r in task.get("requirements", []) + task.get("constraints", [])]
     for fact in task.get("facts", []):
         if fact.get("key") == "scene":
             objects = fact["value"].get("objects", [])
@@ -156,33 +169,33 @@ def session_document(session, history=False, include_messages=True):
     if known and (include_messages or history):
         doc.parts.append(card("Известно", ''.join(known)))
     for q in [q for q in task.get("questions", []) if not q.get("answer")][:3]:
-        body = paragraph(q.get("reason", ""), True)
+        body = paragraph(readable_text(q.get("reason", "")), True)
         for option in q.get("options", []):
             body += doc.link(option["label"], "answer", payload={"answers": [{"question_id": q["id"], "value": option["label"]}]})
         if q.get("allow_unknown"):
             body += doc.link("Не знаю", "answer", payload={"answers": [{"question_id": q["id"], "value": "Не знаю"}]})
         if q.get("allow_free_text"):
-            body += doc.link("Написать ответ…", "input", title=q["text"], field="answers", row={"question_id": q["id"]}, value_key="value")
-        doc.parts.append(card(q["text"], body, "#f0f5ff"))
+            body += doc.link("Написать ответ…", "input", title=readable_text(q["text"]), field="answers", row={"question_id": q["id"]}, value_key="value")
+        doc.parts.append(card(readable_text(q["text"]), body, "#f0f5ff"))
     for a in task.get("assumptions", []):
         if a.get("acceptance") == "pending":
-            doc.parts.append(card("Допущение: " + a["key"], paragraph(human(a["value"]) + ". " + a.get("reason", "")) +
+            doc.parts.append(card("Допущение: " + field_label(a["key"]), paragraph(human(a["value"]) + ". " + readable_text(a.get("reason", ""))) +
                                   doc.link("Принять", "answer", payload={"assumptions": [{"id": a["id"], "accepted": True}]}) +
                                   doc.link("Отклонить", "answer", payload={"assumptions": [{"id": a["id"], "accepted": False}]})))
     ready = task.get("readiness") or {}
     limits = ready.get("reasons", []) + [u["reason"] for u in task.get("unknowns", []) if u.get("blocking") and not u.get("resolved")]
     if limits:
-        doc.parts.append(card("Ограничения", ''.join(paragraph(v) for v in limits), "#fff8e9"))
+        doc.parts.append(card("Ограничения", ''.join(paragraph(readable_text(v)) for v in limits), "#fff8e9"))
     for c in task.get("conflicts", []):
         if not c.get("resolved"):
-            doc.parts.append(card("Противоречие", paragraph(c["reason"]) + doc.link("Уточнить действующее требование…", "input", title="Разрешение противоречия",
+            doc.parts.append(card("Противоречие", paragraph(readable_text(c["reason"])) + doc.link("Уточнить действующее требование…", "input", title="Разрешение противоречия",
                                   field="conflict_resolutions", row={"id": c["id"]}, value_key="reason")))
     failed = ready.get("failed_check_ids", [])
     if failed:
         body = paragraph("Укажите метод, источник и результат фактической проверки. Принятие риска прототипа не подтверждает эксплуатационные свойства.")
         for r in task.get("requirements", []) + task.get("constraints", []):
             if r["id"] in failed:
-                body += doc.link("Подтвердить проверку: " + r["key"], "input", title="Метод, источник и результат проверки",
+                body += doc.link("Подтвердить проверку: " + field_label(r["key"]), "input", title="Метод, источник и результат проверки",
                                  field="manual_checks", row={"requirement_id": r["id"]}, value_key="reason")
         body += doc.link("Печатать как прототип — принять риск…", "risk")
         doc.parts.append(card("Ручная инженерная проверка", body, "#fff8e9"))

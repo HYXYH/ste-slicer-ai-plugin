@@ -158,8 +158,6 @@ class Steps:
                     pending.append(self.question(qid, question["field"], question["text"], question["reason"], question["options"], True, True))
             task["questions"] += pending
             lines = ["Я понял задачу так: " + requirements["summary"]]
-            lines += ["• {} = {}{}{}".format(r["key"], r["value"], " " + r["unit"] if r["unit"] else "",
-                                            " (обязательно)" if r["strength"] == "hard" else "") for r in requirements["rows"]]
             lines.append("\nЕсли всё верно, нажмите «{}». Если нет, напишите, что исправить.".format(CONFIRM) +
                          (" Ответьте также на уточняющие вопросы." if len(pending) > 1 else ""))
             return task, {"summary": "\n".join(lines), "decision_proposals": [], "waiting_step": "requirements"}

@@ -3,6 +3,7 @@ import os
 import re
 
 from .contracts import strict_json
+from ..user_view import field_label
 
 # Order matters: the first material named in the task wins over later mentions.
 MATERIAL_WORDS = (
@@ -185,7 +186,7 @@ def describe(result):
         lines.append("Ориентация: " + result["orientation"] + ".")
     for row in result["settings"]:
         value = {True: "вкл", False: "выкл"}.get(row["value"], row["value"]) if isinstance(row["value"], bool) else row["value"]
-        lines.append("• {} = {}{} — {}".format(row["key"], value, " " + row["unit"] if row["unit"] else "", row["reason"]))
+        lines.append("• {}: {}{} — {}".format(field_label(row["key"]), value, " " + row["unit"] if row["unit"] else "", row["reason"]))
     lines.extend("⚠ " + w for w in result["warnings"])
     lines.append("Источники: " + ", ".join(result["source_ids"]))
     return "\n".join(lines)

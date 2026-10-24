@@ -618,6 +618,10 @@ class AssistantWindow(QWidget):
         elif kind == "document":
             self.client.call(self.path(sid) + "/files/" + action["file_id"] + "/text",
                              lambda value: self.show_text(value["name"], value["text"]))
+        elif kind == "requirements":
+            message = next((row for row in self.session.get("timeline", []) if row.get("id") == action["message_id"]), None)
+            if message and message.get("requirements_card"):
+                self.show_text("Исходные поля и источники", json.dumps(message["requirements_card"], ensure_ascii=False, indent=2))
         elif kind == "action":
             ids, records = list(dict.fromkeys(eid for eid in (action["start_id"], action["finish_id"]) if eid)), []
             def load_next():

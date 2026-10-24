@@ -174,6 +174,13 @@ Rectangle {
                                         Component.onCompleted:fitWidths()
                                         Text { text:modelData.role === "user" ? "Вы" : modelData.role === "assistant" ? "AI Assistant" : "Система"; color:"#587e9f"; font.pixelSize:10; font.bold:true }
                                         Text { Layout.fillWidth:true; text:modelData.text || ""; textFormat:Text.PlainText; wrapMode:Text.Wrap; color:"#2f4a62"; font.pixelSize:12; lineHeight:1.25 }
+                                        AssistantRequirementsCard {
+                                            visible:!!modelData.requirements
+                                            requirements:modelData.requirements || ({})
+                                            expanded:!!modelData.requirementsExpanded
+                                            onToggleRequested:if(root.backend) root.backend.toggleRequirements(modelData.id)
+                                            onDetailsRequested:if(root.backend) root.backend.showRequirements(modelData.id)
+                                        }
                                         Repeater {
                                             model:modelData.files || []
                                             ColumnLayout {

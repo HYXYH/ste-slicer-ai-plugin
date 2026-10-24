@@ -19,6 +19,8 @@ function node(tag, className, text) {
   return element;
 }
 function notice(message) { $("notice").textContent = message || ""; $("notice").hidden = !message; }
+function fieldLabel(key) { return ((currentSession || {}).field_labels || {})[key] || (/[А-Яа-яЁё]/.test(key) ? key.replace(/_/g, " ") : "Дополнительная характеристика"); }
+function readableText(value) { return String(value || "").replace(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g, fieldLabel); }
 async function api(path, method = "GET", body, headers = {}) {
   headers["X-Assistant-Token"] = token;
   if (body !== undefined && !(body instanceof File)) {
@@ -206,6 +208,30 @@ function renderSession(session) {
       node("time", "", new Date(message.created_at).toLocaleTimeString("ru", {hour:"2-digit", minute:"2-digit"})));
     article.append(heading);
     if (message.text) article.append(node("div", "message-body", message.text));
+    if (message.requirements) {
+      const info = message.requirements;
+      const card = node("div", "workflow-card");
+      card.append(node("strong", "", "Распознаны требования · " + info.count));
+      function requirementRow(row) {
+        const element = node("p", row.warning ? "warning" : "", (row.warning ? "⚠ " : "• ") + row.label + ": " + row.value);
+        element.title = row.source;
+        return element;
+      }
+      info.primary.forEach(row => card.append(requirementRow(row)));
+      info.warnings.forEach(warning => card.append(node("p", "warning", "⚠ " + warning)));
+      if (info.secondary.length) {
+        const rest = node("details");
+        rest.append(node("summary", "", "Ещё " + info.secondary.length + " требований"));
+        info.secondary.forEach(row => rest.append(requirementRow(row)));
+        card.append(rest);
+      }
+      card.append(button("Исходные поля и источники", () => {
+        $("document-title").textContent = "Исходные поля и источники требований";
+        $("document-preview").textContent = JSON.stringify(message.requirements_card, null, 2);
+        $("document-dialog").showModal();
+      }));
+      article.append(card);
+    }
     if (message.file_ids.length) {
       const attachments = node("div", "attachments");
       message.file_ids.forEach(id => {
@@ -434,7 +460,7 @@ function renderWorkflow(session, area) {
     rec.settings.forEach(s => {
       const row = node("tr");
       const value = s.value === true ? "вкл" : s.value === false ? "выкл" : String(s.value) + (s.unit ? " " + s.unit : "");
-      row.append(node("td", "settings-key", s.key), node("td", "settings-value", value), node("td", "muted", s.reason));
+      row.append(node("td", "settings-key", fieldLabel(s.key)), node("td", "settings-value", value), node("td", "muted", readableText(s.reason)));
       table.append(row);
     });
     box.append(table);
@@ -443,7 +469,7 @@ function renderWorkflow(session, area) {
   }
   if (map.facts.length || map.requirements.length) {
     const known = panel("Известно", area);
-    map.requirements.concat(map.constraints).forEach(r => known.append(node("p", "", r.key + ": " + human(r.value) + (r.unit ? " " + r.unit : "") + (r.strength === "hard" ? " · обязательное" : ""))));
+    if (!(session.timeline || []).some(message => message.requirements)) map.requirements.concat(map.constraints).forEach(r => known.append(node("p", "", fieldLabel(r.key) + ": " + human(r.value) + (r.unit ? " " + r.unit : "") + (r.strength === "hard" ? " · обязательное" : ""))));
     map.facts.filter(f => f.key === "scene").forEach(f => (f.value.objects || []).forEach(o => known.append(node("p", "", o.name + " · " + human(o.dimensions_mm) + " мм"))));
   }
   const questions = map.questions.filter(q => !q.answer).slice(0, 3);
@@ -458,14 +484,14 @@ function renderWorkflow(session, area) {
   if (questions.length) {
     const box = panel("Нужно уточнить", area);
     questions.forEach(q => {
-      const question = node("div", "question"); question.append(node("strong", "", q.text), node("p", "muted", q.reason));
+      const question = node("div", "question"); question.append(node("strong", "", readableText(q.text)), node("p", "muted", readableText(q.reason)));
       const options = node("div", "workflow-actions");
       (q.options || []).forEach(option => options.append(button(option.label, () => answer(sid, {answers:[{question_id:q.id,value:option.label}]}))));
       if (q.allow_unknown) options.append(button("Не знаю", () => answer(sid, {answers:[{question_id:q.id,value:"Не знаю"}]})));
       question.append(options);
       if (q.allow_free_text) {
         const input = node("input"); input.placeholder = "Ваш ответ"; input.maxLength = 20000;
-        input.setAttribute("aria-label", q.text);
+        input.setAttribute("aria-label", readableText(q.text));
         question.append(input, button("Ответить", () => answer(sid, {answers:[{question_id:q.id,value:input.value}]})));
       }
       box.append(question);
@@ -475,7 +501,7 @@ function renderWorkflow(session, area) {
   if (assumptions.length) {
     const box = panel("Допущения требуют вашего согласия", area);
     assumptions.forEach(a => {
-      const p = node("div", "question"); p.append(node("p", "", a.key + ": " + human(a.value) + ". " + (a.reason || "")),
+      const p = node("div", "question"); p.append(node("p", "", fieldLabel(a.key) + ": " + human(a.value) + ". " + readableText(a.reason)),
         button("Принять", () => answer(sid, {assumptions:[{id:a.id,accepted:true}]})), button("Отклонить", () => answer(sid, {assumptions:[{id:a.id,accepted:false}]})));
       box.append(p);
     });

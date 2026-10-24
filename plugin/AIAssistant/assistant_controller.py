@@ -10,6 +10,7 @@ from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QPushButton, QPlainTextEdit
 from .native_window import LocalClient, AssistantWindow, request_id
 from .native_view import FLOW, TOOLS, SETTINGS, session_document, analytics_document, human
+from .user_view import field_label
 
 PARAMETERS = {key: label for key, (label, unit) in SETTINGS.items()}
 
@@ -32,6 +33,7 @@ class AssistantController(QObject):
         self.message, self.prompt, self.actions = "", None, {}
         self.history, self.analytics_mode, self.disposed = False, False, False
         self.expanded_activity = set()
+        self.expanded_requirements = set()
         self.days, self.last_report, self.last_assessment = 30, 0, 0
         self._slice_progress, self._document_key, self._document = -1., None, ("", {})
         self.timer = QTimer(self)
@@ -173,6 +175,7 @@ class AssistantController(QObject):
         for old in session.get("timeline", session.get("messages", [])):
             row = dict(old)
             row["expanded"] = (session.get("id"), old.get("id")) in self.expanded_activity
+            row["requirementsExpanded"] = (session.get("id"), old.get("id")) in self.expanded_requirements
             row["files"] = [session["files"][fid] for fid in old.get("file_ids", []) if fid in session["files"]]
             messages.append(row)
         document_key = (session.get("id"), session.get("revision"), self.history)
@@ -193,7 +196,7 @@ class AssistantController(QObject):
                       {"name": "Материал", "value": material}, {"name": "Профиль", "value": profile or choice["profile_id"]}]
             for action in plan["actions"]:
                 if action["tool"] == "set_settings":
-                    params.extend({"name": PARAMETERS.get(c["key"], c["key"]), "value": human(c["value"]) + (" " + SETTINGS[c["key"]][1] if c["key"] in SETTINGS and SETTINGS[c["key"]][1] else "")} for c in action["arguments"]["changes"])
+                    params.extend({"name": PARAMETERS.get(c["key"], field_label(c["key"])), "value": human(c["value"]) + (" " + SETTINGS[c["key"]][1] if c["key"] in SETTINGS and SETTINGS[c["key"]][1] else "")} for c in action["arguments"]["changes"])
         runs = session.get("runs", {})
         state = session.get("workflow_state", "idle")
         step = 0 if not messages else 1 if state in ("idle", "analyzing", "waiting_user", "queued", "failed") else 2 if state == "plan_ready" else 3 if state in ("applying", "slicing", "result_ready") else 4
@@ -354,6 +357,8 @@ class AssistantController(QObject):
             self.previewDocument(a["file_id"])
         elif kind == "action":
             self.showAction(a["start_id"], a["finish_id"])
+        elif kind == "requirements":
+            self.showRequirements(a["message_id"])
         elif kind == "import":
             self.importFile(a["file_id"])
         elif kind == "event":
@@ -521,6 +526,17 @@ class AssistantController(QObject):
         else:
             self.expanded_activity.add(key)
         self.update_buttons()
+
+    @pyqtSlot(str)
+    def toggleRequirements(self, message_id):
+        self.expanded_requirements.symmetric_difference_update([(self.current, message_id)])
+        self.update_buttons()
+
+    @pyqtSlot(str)
+    def showRequirements(self, message_id):
+        message = next((row for row in (self.session or {}).get("timeline", []) if row.get("id") == message_id), None)
+        if message and message.get("requirements_card"):
+            self.showText("Исходные поля и источники требований", json.dumps(message["requirements_card"], ensure_ascii=False, indent=2))
 
     def showText(self, title, text):
         dialog = QDialog()

@@ -469,7 +469,7 @@ function renderWorkflow(session, area) {
   }
   if (map.facts.length || map.requirements.length) {
     const known = panel("Известно", area);
-    if (!(session.timeline || []).some(message => message.requirements)) map.requirements.concat(map.constraints).forEach(r => known.append(node("p", "", fieldLabel(r.key) + ": " + human(r.value) + (r.unit ? " " + r.unit : "") + (r.strength === "hard" ? " · обязательное" : ""))));
+    if (!(session.timeline || []).some(message => message.requirements)) map.requirements.concat(map.constraints).forEach(r => known.append(node("p", "", fieldLabel(r.key) + ": " + human(r.value) + (r.unit ? " " + r.unit : ""))));
     map.facts.filter(f => f.key === "scene").forEach(f => (f.value.objects || []).forEach(o => known.append(node("p", "", o.name + " · " + human(o.dimensions_mm) + " мм"))));
   }
   const questions = map.questions.filter(q => !q.answer).slice(0, 3);
@@ -499,14 +499,14 @@ function renderWorkflow(session, area) {
   }
   const assumptions = map.assumptions.filter(a => a.acceptance === "pending");
   if (assumptions.length) {
-    const box = panel("Допущения требуют вашего согласия", area);
+    const box = panel("Что учтено при подборе", area);
     assumptions.forEach(a => {
       const p = node("div", "question"); p.append(node("p", "", fieldLabel(a.key) + ": " + human(a.value) + ". " + readableText(a.reason)),
-        button("Принять", () => answer(sid, {assumptions:[{id:a.id,accepted:true}]})), button("Отклонить", () => answer(sid, {assumptions:[{id:a.id,accepted:false}]})));
+        node("p", "muted", "Если это не подходит, напишите об этом в чат."));
       box.append(p);
     });
   }
-  const limitations = (map.readiness.reasons || []).concat(map.unknowns.filter(u => u.blocking && !u.resolved).map(u => u.reason));
+  const limitations = (map.readiness.reasons || []).concat(map.readiness.limitations || [], map.unknowns.filter(u => (map.readiness.blocking_unknown_ids || []).includes(u.id)).map(u => u.reason));
   if (limitations.length || map.conflicts.some(c => !c.resolved)) {
     const box = panel(active ? "Ограничения предыдущего анализа · обновляются" : "Ограничения", area);
     limitations.forEach(reason => box.append(node("p", "", reason)));
@@ -515,23 +515,6 @@ function renderWorkflow(session, area) {
       const input = node("input"); input.placeholder = "Укажите, какое требование считать действующим"; input.setAttribute("aria-label", input.placeholder);
       box.append(input, button("Разрешить противоречие", () => answer(sid, {conflict_resolutions:[{id:c.id,reason:input.value}]})));
     });
-  }
-  if ((map.readiness.failed_check_ids || []).length) {
-    const box = panel("Ручная инженерная проверка", area);
-    box.append(node("p", "muted", "Подтверждайте требование только после фактической проверки. Укажите метод, источник и результат."));
-    map.requirements.concat(map.constraints).filter(r => map.readiness.failed_check_ids.includes(r.id)).forEach(r => {
-      const input = node("input"); input.placeholder = "Основание проверки: " + r.key; input.setAttribute("aria-label", input.placeholder);
-      box.append(input, button("Подтвердить проверку", () => answer(sid, {manual_checks:[{requirement_id:r.id,reason:input.value}]})));
-    });
-    const risk = node("div", "question");
-    risk.append(node("p", "muted", "Или напечатайте как прототип: ассистент предложит настройки, а непроверенные требования останутся в ограничениях плана."));
-    const purpose = node("input"); purpose.placeholder = "Цель прототипа, например: проверка геометрии и посадки"; purpose.setAttribute("aria-label", purpose.placeholder);
-    risk.append(purpose, button("Печатать как прототип (принять риск)", () => answer(sid, {accept_risk:{reason:purpose.value || "Прототип"}})));
-    box.append(risk);
-  }
-  if ((map.readiness.accepted_risk_ids || []).length) {
-    const box = panel("Режим прототипа", area);
-    box.append(node("p", "warning", "Риск принят. Не подтверждено требований и неизвестных: " + map.readiness.accepted_risk_ids.length + ". Деталь не годится для эксплуатации без испытаний."));
   }
   Object.values(session.plans).forEach(plan => {
     const box = panel("План печати · версия " + plan.version, area);

@@ -25,7 +25,7 @@ MAX_IDENTICAL_CALLS = 3
 ANALYSIS_SECONDS = 600
 # current_data already holds scene, catalogs and knowledge; extra reads rarely help and cost time.
 MAX_TOOL_ROUNDS = 3
-READINESS_NAMES = {"needs_data": "нужны данные", "needs_input": "нужны уточнения", "blocked": "нужна инженерная проверка",
+READINESS_NAMES = {"needs_data": "нужны данные", "needs_input": "нужны уточнения", "blocked": "нужно уточнить противоречия",
                    "ready_for_plan": "данных достаточно для согласования плана", "stale": "данные устарели"}
 STEP_NAMES = {"requirements": "Подтвердите, что требования поняты верно", "material": "Подтвердите выбор материала",
               "select_material": "Выберите подтверждённый материал в STE Slicer и повторите анализ"}
@@ -391,8 +391,6 @@ class Runner:
                 s["messages"].append({"id": uid(), "role": "assistant", "created_at": now(), "run_id": rid,
                                       "text": proposal["summary"] if waiting else proposal["summary"] + "\n\nПроверка: " + READINESS_NAMES[updated["readiness"]["status"]] +
                                       (". " + "; ".join(updated["readiness"]["reasons"]) if updated["readiness"]["reasons"] else "") +
-                                      ("\n\nПрототип: не подтверждено требований — " + str(len(updated["readiness"]["accepted_risk_ids"])) +
-                                       ", риск принят пользователем." if updated["readiness"].get("accepted_risk_ids") else "") +
                                       ("" if state == "plan_ready" or not updated.get("recommended_settings") else "\n\nНастройки слайсера под задачу:\n" + describe(updated["recommended_settings"])),
                                       "file_ids": []})
                 if updated["requirements"] and (waiting == "requirements" or not stepwise):

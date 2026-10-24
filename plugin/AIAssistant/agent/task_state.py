@@ -87,6 +87,7 @@ def merge_proposal(task, proposal, sources):
             if collection == "questions":
                 if not row.get("field") or not row.get("text") or not row.get("reason") or not row.get("affected_decisions"):
                     fail("Вопрос должен объяснять влияние на решение", "INVALID_MODEL_OUTPUT")
+                row = dict(row, allow_unknown=True)
             if collection == "candidates":
                 source_ids(row["evidence_refs"], sources, path + ".evidence_refs")
                 if row["profile_id"] is None:
@@ -103,9 +104,11 @@ def merge_proposal(task, proposal, sources):
                         source_ids(check["source_refs"], sources, path + ".requirement_checks[" + str(check_index) + "].source_refs")
             if row["id"] in existing:
                 old = existing[row["id"]]
+                if collection == "questions":
+                    old = dict(old, allow_unknown=True)
                 if collection in ("requirements", "constraints") and any(row[k] != old[k] for k in RECORD):
                     fail("Замена требования требует нового ID и supersedes", "INVALID_MODEL_OUTPUT")
-                if collection == "unknowns" and old.get("blocking") and not row["blocking"] and not old.get("resolved"):
+                if collection == "unknowns" and old.get("resolution") == "tool" and old.get("blocking") and not row["blocking"] and not old.get("resolved"):
                     fail("Блокирующее неизвестное сначала требует ответа или измерения", "INVALID_MODEL_OUTPUT")
                 if collection == "unknowns" and old.get("resolved"):
                     row = dict(row, resolved=True, resolution_ref=old.get("resolution_ref"))
@@ -167,7 +170,8 @@ def select_default_candidate(task, current_mode):
 
 def readiness(task, scene, sources):
     result = {"status": "needs_data", "blocking_unknown_ids": [], "conflict_ids": [],
-              "pending_assumption_ids": [], "failed_check_ids": [], "reasons": []}
+              "pending_assumption_ids": [], "failed_check_ids": [], "reasons": [],
+              "unverified_requirement_ids": [], "limitations": []}
     if not task["target_object_ids"] or not set(task["target_object_ids"]).issubset(set(o["id"] for o in scene["objects"])):
         result["reasons"].append("Целевые модели отсутствуют в сцене")
         return result
@@ -186,8 +190,34 @@ def readiness(task, scene, sources):
     if missing_profile:
         result["reasons"].append("Профиль для выбранных режима и материала пока не подтверждён. Выберите эти настройки в STE Slicer и повторите анализ.")
     used_assumptions = set(selected[0].get("assumption_ids", [a["id"] for a in task["assumptions"]])) if len(selected) == 1 else set()
-    result["pending_assumption_ids"] = [r["id"] for r in task["assumptions"] if r["id"] in used_assumptions and r.get("acceptance") != "accepted"]
-    result["blocking_unknown_ids"] = [r["id"] for r in task["unknowns"] if r.get("blocking") and not r.get("resolved")]
+    result["pending_assumption_ids"] = [r["id"] for r in task["assumptions"] if r["id"] in used_assumptions and r.get("acceptance") == "rejected"]
+    from ..task_data import known_answer
+    from ..user_view import field_label, readable_text
+    for assumption in task["assumptions"]:
+        if assumption["id"] in used_assumptions and assumption.get("acceptance") == "pending":
+            result["limitations"].append("При подборе принято: " + field_label(assumption.get("key", "")) + " — " +
+                                          str(assumption.get("value", "")) + (" " + assumption["unit"] if assumption.get("unit") else "") +
+                                          ". " + readable_text(assumption.get("reason", "")))
+    if result["pending_assumption_ids"]:
+        result["reasons"].append("Выбранный вариант использует условие, с которым вы не согласились. Уточните его в чате.")
+    unanswered, advisory_fields = [], set()
+    for unknown in task["unknowns"]:
+        if unknown.get("resolved"):
+            continue
+        declined = any(q.get("field") == unknown.get("field") and q.get("answer")
+                       and not known_answer(q["answer"].get("value")) for q in task.get("questions", []))
+        supplied_unknown = any(r.get("key") == unknown.get("field") and not known_answer(r.get("value"))
+                               and any(sources.get(ref["id"], {}).get("kind") == "user" for ref in r.get("source_refs", []))
+                               for r in task["requirements"] + task["constraints"])
+        advisory = unknown.get("resolution") in ("knowledge", "assumption") or (
+            unknown.get("resolution") == "user" and (declined or supplied_unknown))
+        if advisory:
+            advisory_fields.add(unknown.get("field"))
+            unanswered.append(readable_text(unknown.get("reason") or "Часть условий использования неизвестна"))
+        elif unknown.get("blocking"):
+            result["blocking_unknown_ids"].append(unknown["id"])
+    if unanswered:
+        result["limitations"].append("Не все условия известны; подбор выполнен по доступным данным: " + "; ".join(dict.fromkeys(unanswered)))
     if len(selected) != 1:
         result["reasons"].append("Нужен один выбранный вариант")
     else:
@@ -201,20 +231,24 @@ def readiness(task, scene, sources):
                          and sources[ref["id"]].get("requirement_id") == requirement["id"]
                          for ref in check.get("source_refs", []))
             if check.get("status") != "pass" or not proven:
-                result["failed_check_ids"].append(requirement["id"])
-        if selected[0].get("missing_fields"):
+                advisory_fields.add(requirement.get("key"))
+                result["unverified_requirement_ids"].append(requirement["id"])
+                if check.get("status") == "fail":
+                    result["limitations"].append("Выбранный вариант может не подойти: " + field_label(requirement.get("key", "")) + ".")
+        if result["unverified_requirement_ids"]:
+            result["limitations"].append("Подбор материала и настроек не подтверждает все свойства готовой детали.")
+        configuration_fields = {"profile_id", "material_id", "extruder_id", "printer_id", "mode", "snapshot_ref", "target_object_ids"}
+        if any(field in configuration_fields or field not in advisory_fields for field in selected[0].get("missing_fields", [])):
             result["reasons"].append("Не заполнены существенные условия варианта")
     if task.get("risk_acceptance"):
         # Prototype mode: the user explicitly accepted unproven engineering requirements.
         # They stay visible as risks; data the user or tools can still supply keeps blocking.
         unknowns = {r["id"]: r for r in task["unknowns"]}
-        risky = [uid for uid in result["blocking_unknown_ids"] if unknowns[uid].get("resolution") in ("knowledge", "assumption")]
-        result["accepted_risk_ids"] = result["failed_check_ids"] + risky
-        result["failed_check_ids"] = []
-        result["blocking_unknown_ids"] = [uid for uid in result["blocking_unknown_ids"] if uid not in risky]
-    if result["conflict_ids"] or result["failed_check_ids"]:
+        risky = [uid for uid, unknown in unknowns.items() if not unknown.get("resolved") and unknown.get("resolution") in ("knowledge", "assumption")]
+        result["accepted_risk_ids"] = result["unverified_requirement_ids"] + risky
+    if result["conflict_ids"]:
         result["status"] = "blocked"
-        result["reasons"].append("Жёсткие требования или противоречия требуют проверки специалистом")
+        result["reasons"].append("Уточните противоречивые условия задачи")
     elif missing_profile or result["blocking_unknown_ids"] or result["pending_assumption_ids"]:
         result["status"] = "needs_input"
     elif not result["reasons"]:

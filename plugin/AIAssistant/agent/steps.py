@@ -6,6 +6,7 @@ import json
 
 from ..session import ApiError
 from ..documents import message_text
+from ..user_view import field_label
 from .contracts import fail, strict_json, validate, obj, array
 from .output_contract import validation_reason
 from .prompts import STEP_SYSTEM, STEP_REQUIREMENTS, STEP_CLARIFY, STEP_MATERIAL, STEP_SUMMARY
@@ -140,13 +141,15 @@ class Steps:
         confirm_id = "step-req-" + key
         clarify_ids = ["step-clar-" + key + "-" + str(index + 1) for index in range(len(requirements["clarify"]))]
         answered = {qid: questions[qid]["answer"] for qid in [confirm_id] + clarify_ids if questions.get(qid, {}).get("answer")}
-        answer_rows, answer_lines = [], []
+        answer_rows, answer_lines, uncertainties = [], [], []
         for qid, question in zip(clarify_ids, requirements["clarify"]):
             answer = answered.get(qid)
             if answer and answer["value"].strip().lower() not in (UNKNOWN.lower(), "unknown") and answer["message_id"] in session["sources"]:
                 answer_rows.append({"id": "req-" + qid, "key": question["field"], "value": answer["value"], "unit": "", "strength": "preference",
                                     "source": [{"id": answer["message_id"], "version": session["sources"][answer["message_id"]]["version"]}]})
                 answer_lines.append(question["text"] + " " + answer["value"])
+            elif answer:
+                uncertainties.append(field_label(question["field"]) + ": данных нет; подбор выполнен по остальным условиям задачи.")
         targets = task["target_object_ids"]
         task["requirements"] = [{"id": r["id"], "key": r["key"], "value": r["value"], "unit": r["unit"] or None, "status": r.get("status", "known"),
                                  "strength": r["strength"], "source_refs": r.get("source") or user_refs, "object_ids": targets, "supersedes": None}
@@ -247,18 +250,15 @@ class Steps:
         actions = [{"id": "step-settings", "tool": "set_settings", "arguments": {"changes": changes}, "before": None, "after": None,
                     "reason": "Настройки по справочнику материалов и правилам процесса: " + ", ".join(final["source_ids"]),
                     "source_refs": config_refs}] if changes else []
-        limitations = (summary["limitations"] if summary else []) + final["warnings"]
+        limitations = (summary["limitations"] if summary else []) + final["warnings"] + uncertainties
         if final["orientation"]:
             limitations.append("Ориентацию задайте вручную: " + final["orientation"])
         decision = {"id": "step-decision", "candidate_id": candidate["id"], "actions": actions,
                     "limitations": limitations, "source_refs": config_refs}
         task["candidates"], task["decision_proposals"] = [candidate], [decision]
         text = summary["summary"] if summary else "Материал {}. Настройки рассчитаны по справочнику под требования задачи.".format(short_title(record))
-        if not task.get("risk_acceptance") and any(check["status"] != "pass" for check in checks):
-            text += "\n\nОбязательные требования пока не подтверждены. Укажите результаты проверки или отдельно примите риск подготовки прототипа."
-        else:
-            text += ("\n\nДальше: нажмите «Согласовать, применить и рассчитать» в плане печати — настройки применятся "
-                     "и слайсер нарежет модель. Затем «Выбрать папку и сохранить» запишет result.gcode и project.3mf.")
+        text += ("\n\nДальше: нажмите «Согласовать, применить и рассчитать» в плане печати — настройки применятся "
+                 "и слайсер нарежет модель. Затем «Выбрать папку и сохранить» запишет result.gcode и project.3mf.")
         return task, {"summary": text, "decision_proposals": [decision]}
 
     @staticmethod

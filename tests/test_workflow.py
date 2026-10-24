@@ -415,10 +415,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(material["options"][0]["label"], "Согласен")
         session = self.finished(self.server.runner.answers(self.sid, {"request_id": "a3", "answers": [{"question_id": material["id"], "value": "Согласен"}]}))
         self.assertEqual(asked, ["requirements", "clarify", "material", "summary"])
-        self.assertEqual(session["workflow_state"], "waiting_user")
         self.assertNotIn("risk_acceptance", session["task_map"])
-        self.assertEqual(session["plans"], {})
-        session = self.finished(self.server.runner.answers(self.sid, {"request_id": "a4", "accept_risk": {"reason": "Проверка посадки прототипа"}}))
         self.assertEqual(session["workflow_state"], "plan_ready", session["events"][-1])
         plan = next(iter(session["plans"].values()))
         changes = {c["key"]: c for c in plan["actions"][0]["arguments"]["changes"]}
@@ -427,9 +424,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(changes["layer_height"]["target"], {"scope": "global"})
         self.assertNotIn("cool_fan_speed", changes)
         self.assertTrue(any("cool_fan_speed" in l for l in plan["limitations"]))
-        # Agreeing with the material accepts the unproven hard requirement as a prototype risk.
-        # That legacy behavior is now deliberately split: only the separate a4 answer accepts risk.
-        self.assertEqual(session["task_map"]["readiness"]["accepted_risk_ids"], [r["id"] for r in session["task_map"]["requirements"] if r["key"] == "load"])
+        # Agreeing with the material only accepts its selection, never proves a hard requirement.
+        # Unverified properties remain visible as limitations without a separate risk answer.
+        self.assertEqual(session["task_map"]["readiness"]["unverified_requirement_ids"], [r["id"] for r in session["task_map"]["requirements"] if r["key"] == "load"])
+        self.assertTrue(any("не подтверждает" in line for line in plan["limitations"]))
         self.assertIn("result.gcode", session["messages"][-1]["text"])
         self.assertEqual(self.bridge.mutations, [])
         # The algorithm ends with G-code: approve, apply and slice, then export.
@@ -468,9 +466,7 @@ class WorkflowTests(unittest.TestCase):
         # The slicer held material-1: agreeing lets the agent select Enduse PETG itself and finish the plan.
         self.assertEqual(self.bridge.mutations, ["select_material"])
         self.assertEqual(self.bridge.context["extruders"][0]["material"]["id"], "enduse_petg")
-        self.assertEqual(session["workflow_state"], "waiting_user")
         self.assertNotIn("risk_acceptance", session["task_map"])
-        session = self.finished(self.server.runner.answers(self.sid, {"request_id": "b4", "accept_risk": {"reason": "Проверка геометрии прототипа"}}))
         self.assertEqual(session["workflow_state"], "plan_ready", session["events"][-1])
         self.assertEqual(next(iter(session["plans"].values()))["selected"]["material_id"], "enduse_petg")
         self.assertEqual(session["task_map"]["recommended_settings"]["material"]["basis"], "подтверждён пользователем")
@@ -645,14 +641,19 @@ class StateTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 strict_json(text)
 
-    def test_readiness_unknown_is_not_pass_and_assumption_needs_consent(self):
+    def test_readiness_unknown_is_not_pass_and_assumption_is_advisory(self):
         task = new_map()
         scene = {"snapshot_ref": {"id": "s"}, "objects": [{"id": "n"}]}
         task.update(target_object_ids=["n"], snapshot_ref=scene["snapshot_ref"], candidates=[{"id": "c", "status": "selected", "requirement_checks": [], "missing_fields": []}],
                     requirements=[{"id": "r", "key": "strength", "strength": "hard", "status": "unknown"}])
-        self.assertEqual(readiness(task, scene, {})["status"], "blocked")
+        result = readiness(task, scene, {})
+        self.assertEqual(result["status"], "ready_for_plan")
+        self.assertEqual(result["unverified_requirement_ids"], ["r"])
+        self.assertTrue(result["limitations"])
         task["requirements"] = []
         task["assumptions"] = [{"id": "a", "acceptance": "pending"}]
+        self.assertEqual(readiness(task, scene, {})["status"], "ready_for_plan")
+        task["assumptions"][0]["acceptance"] = "rejected"
         self.assertEqual(readiness(task, scene, {})["status"], "needs_input")
         task["assumptions"][0]["acceptance"] = "accepted"
         self.assertEqual(readiness(task, scene, {})["status"], "ready_for_plan")
@@ -717,9 +718,9 @@ class StateTests(unittest.TestCase):
         task.update(target_object_ids=["n"], snapshot_ref=scene["snapshot_ref"],
                     candidates=[{"id": "c", "status": "selected", "requirement_checks": [], "missing_fields": []}],
                     requirements=[{"id": "r", "key": "strength", "strength": "hard", "status": "unknown"}],
-                    unknowns=[{"id": "u-knowledge", "blocking": True, "resolution": "knowledge"},
-                              {"id": "u-user", "blocking": True, "resolution": "user"}])
-        self.assertEqual(readiness(task, scene, {})["status"], "blocked")
+                    unknowns=[{"id": "u-knowledge", "field": "strength", "blocking": True, "resolution": "knowledge"},
+                              {"id": "u-user", "field": "environment", "blocking": True, "resolution": "user"}])
+        self.assertEqual(readiness(task, scene, {})["status"], "needs_input")
         task["risk_acceptance"] = {"message_id": "m", "reason": "Прототип"}
         result = readiness(task, scene, {})
         self.assertEqual(result["status"], "needs_input")
@@ -745,7 +746,7 @@ class StateTests(unittest.TestCase):
         explicit = recommend("Шестерня из PETG, Tg не ниже 90 °C", None)
         self.assertEqual(explicit["material"]["id"], "enduse_petg")
         self.assertTrue(any("Подходят по температуре" in w for w in explicit["warnings"]))
-        self.assertIn("support_enable", describe(bracket))
+        self.assertIn("Поддержки", describe(bracket))
 
     def test_default_candidate_prefers_current_mode_with_a_decision(self):
         task = new_map()
@@ -784,12 +785,15 @@ class StateTests(unittest.TestCase):
         task = new_map()
         scene = {"objects": [{"id": "node"}], "snapshot_ref": {"id": "snapshot"}}
         task.update(target_object_ids=["node"], snapshot_ref=scene["snapshot_ref"],
-                    requirements=[{"id": "strength", "strength": "hard", "status": "known"}],
+                    requirements=[{"id": "strength", "key": "strength", "strength": "hard", "status": "known"}],
                     candidates=[{"id": "c", "status": "selected", "requirement_checks": [{"requirement_id": "strength", "status": "pass", "source_refs": [{"id": "manual", "version": 1}]}]}])
         sources = {"manual": {"kind": "manual", "version": 1, "requirement_id": "other"}}
-        self.assertEqual(readiness(task, scene, sources)["status"], "blocked")
+        result = readiness(task, scene, sources)
+        self.assertEqual(result["status"], "ready_for_plan")
+        self.assertEqual(result["unverified_requirement_ids"], ["strength"])
         sources["manual"]["requirement_id"] = "strength"
         self.assertEqual(readiness(task, scene, sources)["status"], "ready_for_plan")
+        self.assertEqual(readiness(task, scene, sources)["unverified_requirement_ids"], [])
 
 
 class AdapterTests(unittest.TestCase):

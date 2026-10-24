@@ -109,6 +109,7 @@ class MissingProfileTests(unittest.TestCase):
         task = session["task_map"]
         self.assertTrue(task["risk_acceptance"])
         self.assertTrue(task["readiness"]["accepted_risk_ids"])
+        self.assertTrue(task["readiness"]["limitations"])
         self.assertIsNone(task["candidates"][0]["profile_id"])
         self.assertEqual(task["readiness"]["status"], "needs_input")
         self.assertEqual(session["workflow_state"], "waiting_user")

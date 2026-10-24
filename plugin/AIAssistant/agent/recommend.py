@@ -172,7 +172,7 @@ def recommend(text, configuration=None, preferred_material_id=None, directory=No
     if mode in ("cylindrical", "cylindrical_full"):
         warnings.append("Режим 5D: часть настроек имеет отдельные ключи *_cylindrical, проверьте их в слайсере.")
     if load_bearing:
-        warnings.append("Справочные данные не доказывают прочность детали: для эксплуатации нужны испытания.")
+        warnings.append("Допустимая нагрузка готовой детали неизвестна: свойства пластика из справочника не определяют прочность конкретной печати.")
     result = {"material": {"id": material_id, "title": record["title"] if record else None, "basis": basis},
             "mode": mode, "orientation": orientation, "settings": settings, "warnings": warnings, "source_ids": sources}
     return experience(result) if experience else result

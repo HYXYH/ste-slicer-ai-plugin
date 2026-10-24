@@ -113,9 +113,7 @@ class Plans:
                 "target_object_ids": session["task_map"]["target_object_ids"],
                 "selected": {k: selected[k] for k in ("mode", "material_id", "profile_id", "extruder_id")},
                 "actions": copy.deepcopy(decision["actions"]),
-                "limitations": decision.get("limitations", []) + (
-                    ["Режим прототипа: инженерные требования не подтверждены, риск принят пользователем"]
-                    if session["task_map"]["readiness"].get("accepted_risk_ids") else []),
+                "limitations": list(dict.fromkeys(decision.get("limitations", []) + session["task_map"]["readiness"].get("limitations", []))),
                 "assumptions": copy.deepcopy(session["task_map"]["assumptions"]), "status": "draft", "approval": None,
                 "completed_actions": [], "created_at": now()}
         scene = self.bridge.call("get_scene_snapshot", {})

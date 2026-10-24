@@ -179,31 +179,19 @@ def session_document(session, history=False, include_messages=True):
         doc.parts.append(card(readable_text(q["text"]), body, "#f0f5ff"))
     for a in task.get("assumptions", []):
         if a.get("acceptance") == "pending":
-            doc.parts.append(card("Допущение: " + field_label(a["key"]), paragraph(human(a["value"]) + ". " + readable_text(a.get("reason", ""))) +
-                                  doc.link("Принять", "answer", payload={"assumptions": [{"id": a["id"], "accepted": True}]}) +
-                                  doc.link("Отклонить", "answer", payload={"assumptions": [{"id": a["id"], "accepted": False}]})))
+            doc.parts.append(card("Что учтено при подборе: " + field_label(a["key"]), paragraph(human(a["value"]) + ". " + readable_text(a.get("reason", ""))) +
+                                  paragraph("Если это не подходит, напишите об этом в чат.", True)))
     ready = task.get("readiness") or {}
     restarted = "Приложение перезапущено" in ready.get("reasons", [])
     if restarted and include_messages and session["messages"] and not session.get("calibration_for"):
         doc.parts.append(card("Нужно обновить анализ", paragraph("После перезапуска нужно обновить анализ сцены и настроек. История чата сохранена.") + doc.link("Обновить анализ", "analyze"), "#eaf4ff"))
-    limits = [reason for reason in ready.get("reasons", []) if reason != "Приложение перезапущено"] + [u["reason"] for u in task.get("unknowns", []) if u.get("blocking") and not u.get("resolved")]
+    limits = [reason for reason in ready.get("reasons", []) if reason != "Приложение перезапущено"] + ready.get("limitations", []) + [u["reason"] for u in task.get("unknowns", []) if u["id"] in ready.get("blocking_unknown_ids", [])]
     if limits:
         doc.parts.append(card("Ограничения", ''.join(paragraph(readable_text(v)) for v in limits), "#fff8e9"))
     for c in task.get("conflicts", []):
         if not c.get("resolved"):
             doc.parts.append(card("Противоречие", paragraph(readable_text(c["reason"])) + doc.link("Уточнить действующее требование…", "input", title="Разрешение противоречия",
                                   field="conflict_resolutions", row={"id": c["id"]}, value_key="reason")))
-    failed = ready.get("failed_check_ids", [])
-    if failed:
-        body = paragraph("Укажите метод, источник и результат фактической проверки. Принятие риска прототипа не подтверждает эксплуатационные свойства.")
-        for r in task.get("requirements", []) + task.get("constraints", []):
-            if r["id"] in failed:
-                body += doc.link("Подтвердить проверку: " + field_label(r["key"]), "input", title="Метод, источник и результат проверки",
-                                 field="manual_checks", row={"requirement_id": r["id"]}, value_key="reason")
-        body += doc.link("Печатать как прототип — принять риск…", "risk")
-        doc.parts.append(card("Ручная инженерная проверка", body, "#fff8e9"))
-    if ready.get("accepted_risk_ids"):
-        doc.parts.append(card("Режим прототипа", paragraph("Риск принят. Непроверенные требования остаются ограничениями; эксплуатация требует испытаний."), "#fff8e9"))
     for plan in session.get("plans", {}).values():
         choice = plan["selected"]
         body = paragraph("Режим: " + MODES.get(choice["mode"], choice["mode"]) + " · материал: " + choice["material_id"] + " · профиль: " + human(choice["profile_id"]))

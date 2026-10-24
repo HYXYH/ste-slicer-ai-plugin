@@ -90,7 +90,7 @@ class SlicerAPI:
         scene.pop("effective_settings")
         if object_ids and not set(object_ids).issubset(set(o["id"] for o in objects)):
             fail("Целевой объект удалён", "OBJECT_NOT_FOUND", 409)
-        scene.update(snapshot_ref=reference, captured_at=now(), warnings=["Пригодность для нагрузок и геометрия поддержек требуют инженерной проверки"])
+        scene.update(snapshot_ref=reference, captured_at=now(), warnings=["По размерам модели нельзя определить допустимую нагрузку или необходимость поддержек"])
         return scene
 
     def get_printer_capabilities(self):

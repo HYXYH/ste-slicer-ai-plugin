@@ -10,9 +10,11 @@ class Settings:
     def __init__(self, bridge):
         self.bridge = bridge
         self.lock = threading.RLock()
-        self.config = {"base_url": "", "api_key": "", "model": ""}
+        self.config = {"base_url": "", "api_key": "", "model": "", "pipeline": "stepwise"}
         if hasattr(bridge, "call"):
             self.config.update(bridge.call("preferences", {}))
+        # An empty preference means the default stepwise analysis.
+        self.config["pipeline"] = self.config.get("pipeline") or "stepwise"
 
     def private(self):
         with self.lock:
@@ -20,10 +22,12 @@ class Settings:
 
     def public(self):
         config = self.private()
-        return {"base_url": config["base_url"], "model": config["model"], "key_configured": bool(config["api_key"])}
+        return {"base_url": config["base_url"], "model": config["model"], "pipeline": config["pipeline"], "key_configured": bool(config["api_key"])}
 
     def update(self, body, clear=False):
-        validate(body, obj({k: {"type": "string", "maxLength": 8192} for k in ("base_url", "model", "api_key")}))
+        schema = obj({k: {"type": "string", "maxLength": 8192} for k in ("base_url", "model", "api_key")})
+        schema["properties"]["pipeline"] = {"type": "string", "enum": ["stepwise", "single"]}
+        validate(body, schema)
         values = dict(body)
         if values.get("base_url"):
             endpoint(values["base_url"])

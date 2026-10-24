@@ -147,6 +147,19 @@ def resolve_tool_unknowns(task, sources, snapshot_ref):
             unknown.update(resolved=True, resolution_ref=measurements[0][1])
 
 
+def select_default_candidate(task, current_mode):
+    """The model often leaves every variant possible. Pick one that already has a decision, preferring the current mode."""
+    if any(c["status"] == "selected" for c in task["candidates"]):
+        return None
+    decided = set(d["candidate_id"] for d in task["decision_proposals"])
+    possible = [c for c in task["candidates"] if c["status"] == "possible" and c["id"] in decided]
+    preferred = [c for c in possible if c["mode"] == current_mode] or possible
+    if not preferred:
+        return None
+    preferred[0]["status"] = "selected"
+    return preferred[0]["id"]
+
+
 def readiness(task, scene, sources):
     result = {"status": "needs_data", "blocking_unknown_ids": [], "conflict_ids": [],
               "pending_assumption_ids": [], "failed_check_ids": [], "reasons": []}
@@ -177,6 +190,14 @@ def readiness(task, scene, sources):
                 result["failed_check_ids"].append(requirement["id"])
         if selected[0].get("missing_fields"):
             result["reasons"].append("Не заполнены существенные условия варианта")
+    if task.get("risk_acceptance"):
+        # Prototype mode: the user explicitly accepted unproven engineering requirements.
+        # They stay visible as risks; data the user or tools can still supply keeps blocking.
+        unknowns = {r["id"]: r for r in task["unknowns"]}
+        risky = [uid for uid in result["blocking_unknown_ids"] if unknowns[uid].get("resolution") in ("knowledge", "assumption")]
+        result["accepted_risk_ids"] = result["failed_check_ids"] + risky
+        result["failed_check_ids"] = []
+        result["blocking_unknown_ids"] = [uid for uid in result["blocking_unknown_ids"] if uid not in risky]
     if result["conflict_ids"] or result["failed_check_ids"]:
         result["status"] = "blocked"
         result["reasons"].append("Жёсткие требования или противоречия требуют проверки специалистом")

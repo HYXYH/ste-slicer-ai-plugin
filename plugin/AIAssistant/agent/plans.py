@@ -54,6 +54,23 @@ class Plans:
         capabilities = self.bridge.call("get_printer_capabilities", {})
         if choice["mode"] not in capabilities["modes"]:
             fail("Режим недоступен", "NO_COMPATIBLE_PROFILE", 409)
+        experience_refs = set()
+        for action in plan["actions"]:
+            for ref in action["source_refs"]:
+                source = session["sources"].get(ref["id"], {})
+                if source.get("kind") == "print_experience":
+                    experience_refs.add(ref["id"])
+                elif source.get("tool") == "search_print_experience":
+                    experience_refs.update(row["id"] for row in source.get("data", {}).get("lessons", []))
+        if experience_refs:
+            from ..experience import proposed_snapshot
+            snapshot = self.bridge.call("get_print_context", {})
+            changes = [dict(change, source="plan", reason="plan", unit=None) for action in plan["actions"] if action["tool"] == "set_settings"
+                       for change in action["arguments"]["changes"]]
+            result = {"material": {"id": choice["material_id"]}, "mode": choice["mode"], "settings": changes}
+            applicable = self.server.print_feedback.db.find(proposed_snapshot(snapshot, result))
+            if experience_refs - set(row["id"] for row in applicable.get("lessons", [])):
+                fail("Исправление из опыта не подтверждено для параметров этого плана. Повторите анализ.", "STALE_INPUT", 409)
         seen, previous_order = set(), -1
         for action in plan["actions"]:
             if set(action) != {"id", "tool", "arguments", "before", "after", "reason", "source_refs"} or not action["reason"] or action["id"] in seen:

@@ -254,6 +254,25 @@ class AssistantController(QObject):
     def newChat(self):
         self.client.call("/api/sessions", lambda value: self.select(value["id"]), "POST", {})
 
+    @pyqtSlot()
+    def reportPrintResult(self):
+        sid = self.current
+        if not sid:
+            return
+        def show(state):
+            from .feedback_dialog import FeedbackDialog
+            dialog = FeedbackDialog(self, state, sid)
+            dialog.exec_()
+            self.poll()
+        self.client.call(self.path(sid) + "/print-feedback", show)
+
+    @pyqtSlot()
+    def showPrintExperience(self):
+        def show(data):
+            from .feedback_dialog import show_library
+            show_library(self, data)
+        self.client.call("/api/experience", show)
+
     @pyqtSlot(str)
     def rename(self, title):
         self.client.call(self.path() + "/workspace", self.receive_session, "PATCH", {"title": title})

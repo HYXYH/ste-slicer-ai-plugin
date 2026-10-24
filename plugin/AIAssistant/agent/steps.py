@@ -47,8 +47,9 @@ def is_step(question):
 
 
 class Steps:
-    def __init__(self, complete, rejected, progress):
+    def __init__(self, complete, rejected, progress, experience=None):
         self.complete, self.rejected, self.progress = complete, rejected, progress
+        self.experience = experience
 
     def ask(self, prompt, payload, schema, phase):
         """Two bounded attempts; None lets the caller use its reference fallback."""
@@ -208,7 +209,8 @@ class Steps:
         # Historical behavior, superseded by a separate explicit risk confirmation:
         # The material question names this consequence, so agreeing is the explicit prototype consent.
         # Material consent now authorizes only the material; Runner.answers owns risk acceptance.
-        final = recommend(text, context, record["material_ids"][0], confirmed=True)
+        final = recommend(text, context, record["material_ids"][0], confirmed=True, experience=self.experience)
+        config_refs = config_refs + [{"id": s["source"], "version": 1} for s in final["settings"] if s.get("target")]
         task["recommended_settings"] = final
         extruders = context.get("extruders") or []
         extruder = next((e for e in extruders if known_id(record, (e.get("material") or {}).get("id"))), None)
@@ -240,7 +242,7 @@ class Steps:
                      "missing_fields": [], "evidence_refs": config_refs, "rejection_reasons": [], "assumption_ids": [],
                      "status": "selected", "source_refs": config_refs}
         changes = [{"key": s["key"], "value": s["value"],
-                    "target": {"scope": "global"} if s["key"] in GLOBAL_KEYS else {"scope": "extruder", "extruder_id": extruder["id"]}}
+                    "target": s.get("target") or ({"scope": "global"} if s["key"] in GLOBAL_KEYS else {"scope": "extruder", "extruder_id": extruder["id"]})}
                    for s in final["settings"]]
         actions = [{"id": "step-settings", "tool": "set_settings", "arguments": {"changes": changes}, "before": None, "after": None,
                     "reason": "Настройки по справочнику материалов и правилам процесса: " + ", ".join(final["source_ids"]),

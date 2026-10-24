@@ -109,6 +109,18 @@ class Runner:
         llm = LLMClient(self.server.settings, observer=llm_metric)
         counts, calls, repeated, cached = {"llm": 0}, [], {}, {}
         visible_sources = set()
+        def apply_experience(result):
+            from ..experience import proposed_snapshot, reuse
+            try:
+                snapshot = self.server.bridge.call("get_print_context", {})
+                evidence = self.server.print_feedback.db.find(proposed_snapshot(snapshot, result))
+            except ApiError:
+                return result
+            def register(s):
+                for lesson in evidence.get("lessons", []):
+                    s["sources"][lesson["id"]] = {"id": lesson["id"], "version": 1, "kind": "print_experience", "data": lesson}
+            self.store.edit(sid, register)
+            return reuse(result, evidence)
         def cancelled():
             return (self.closed.is_set() or rid in self.cancelled_ids or
                     self.store.internal(sid)["input_revision"] != revision)
@@ -187,6 +199,7 @@ class Runner:
             if scene["snapshot_ref"] != configuration["snapshot_ref"]:
                 fail("Сцена изменилась между чтениями", "STALE_INPUT", 409)
             knowledge = tool("search_knowledge", {"query": task_text(session)[:20000] or "подготовка печати", "limit": 50})
+            print_experience = tool("search_print_experience", {})
             materials = tool("list_materials", {"limit": 50})
             profiles = tool("find_compatible_profiles", {"limit": 50})
             def observed(s):
@@ -218,7 +231,7 @@ class Runner:
             if stepwise:
                 def progress(message):
                     self.store.event(sid, rid, "progress", phase="step", message=message)
-                steps = Steps(complete, rejected, progress)
+                steps = Steps(complete, rejected, progress, apply_experience)
                 catalog = list(materials["data"]["items"])
                 cursor = materials["data"].get("next_cursor")
                 while cursor and len(catalog) < 500:
@@ -264,7 +277,7 @@ class Runner:
                 latest = self.store.internal(sid)
             else:
                 context = analysis_context(session, {"scene": scene_result, "capabilities": capabilities, "configuration": configuration,
-                                                     "knowledge": knowledge, "materials": materials, "profiles": profiles})
+                                                     "knowledge": knowledge, "materials": materials, "profiles": profiles, "print_experience": print_experience})
                 visible_sources.update(context["sources"])
                 contract_text = "\nТочная JSON Schema ответа (кроме структуры, сервер проверяет источники и инженерные основания):\n" + json.dumps(proposal_schema(), ensure_ascii=False, separators=(",", ":"))
                 messages = [{"role": "system", "content": SYSTEM + "\n" + DECISION + contract_text}, {"role": "user", "content": json.dumps(context, ensure_ascii=False, separators=(",", ":"))}]
@@ -353,7 +366,7 @@ class Runner:
             if not stepwise:
                 selected = next((c for c in updated["candidates"] if c["status"] == "selected"), None)
                 updated["recommended_settings"] = recommend(task_text(self.store.internal(sid)), configuration["data"].get("context"),
-                                                            selected["material_id"] if selected else None)
+                                                            selected["material_id"] if selected else None, experience=apply_experience)
             def save(s):
                 if s["input_revision"] != revision or rid in self.cancelled_ids:
                     fail("Запуск устарел", "CANCELLED", 409)
@@ -399,7 +412,7 @@ class Runner:
             if status == "failed":
                 try:
                     # The user still gets settings: the reference base answers without the LLM.
-                    fallback = recommend(task_text(self.store.internal(sid)), configuration["data"].get("context") if configuration else None)
+                    fallback = recommend(task_text(self.store.internal(sid)), configuration["data"].get("context") if configuration else None, experience=apply_experience)
                 except Exception:
                     fallback = None
             # Terminal state and its diagnostic become visible together to readers.

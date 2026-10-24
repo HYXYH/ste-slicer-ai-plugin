@@ -92,7 +92,7 @@ def service_limit(record):
     return value
 
 
-def recommend(text, configuration=None, preferred_material_id=None, directory=None, confirmed=False):
+def recommend(text, configuration=None, preferred_material_id=None, directory=None, confirmed=False, experience=None):
     records = load_records(directory)
     configuration = configuration or {}
     extruders = configuration.get("extruders") or []
@@ -173,8 +173,9 @@ def recommend(text, configuration=None, preferred_material_id=None, directory=No
         warnings.append("Режим 5D: часть настроек имеет отдельные ключи *_cylindrical, проверьте их в слайсере.")
     if load_bearing:
         warnings.append("Справочные данные не доказывают прочность детали: для эксплуатации нужны испытания.")
-    return {"material": {"id": material_id, "title": record["title"] if record else None, "basis": basis},
+    result = {"material": {"id": material_id, "title": record["title"] if record else None, "basis": basis},
             "mode": mode, "orientation": orientation, "settings": settings, "warnings": warnings, "source_ids": sources}
+    return experience(result) if experience else result
 
 
 def describe(result):

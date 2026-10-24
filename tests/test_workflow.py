@@ -70,6 +70,9 @@ class FakeSlicer:
             return copy.deepcopy(self.preferences)
         if name == "get_scene_snapshot":
             result = self.scene()
+        elif name == "get_print_context":
+            result = {"context": self.snapshot(), "objects": copy.deepcopy(self.objects), "settings": [],
+                      "snapshot_ref": self.scene()["snapshot_ref"], "captured_at": "test"}
         elif name == "get_printer_capabilities":
             result = {"modes": ["classic", "cylindrical", "cylindrical_full"], "extruders": [{"id": "extruder-1"}]}
         elif name == "get_current_configuration":

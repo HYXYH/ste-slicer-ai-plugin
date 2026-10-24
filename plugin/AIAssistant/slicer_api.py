@@ -123,6 +123,20 @@ class SlicerAPI:
         return {"context": context, "profile_id": self.profile_id(),
                 "signature": digest({"version": 1, "configuration": stable, "settings": settings})}
 
+    def get_print_context(self):
+        scene = self.get_scene_snapshot()
+        stack = self.stack()
+        settings = [{"target": {"scope": "global"}, "values": {
+            k: plain(stack.getProperty(k, "value")) for k in sorted(stack.getAllKeys())}}]
+        for extruder in sorted(stack.extruders.values(), key=lambda e: e.getId()):
+            settings.append({"target": {"scope": "extruder", "extruder_id": extruder.getId()},
+                             "values": {k: plain(extruder.getProperty(k, "value")) for k in sorted(extruder.getAllKeys())}})
+        context = scene["configuration"]
+        for extruder in context["extruders"]:
+            extruder["nozzle_mm"] = plain(self.stack({"scope": "extruder", "extruder_id": extruder["id"]}).getProperty("machine_nozzle_size", "value"))
+        return {"context": context, "settings": settings, "objects": scene["objects"],
+                "snapshot_ref": scene["snapshot_ref"], "captured_at": now()}
+
     def _current_only(self, arguments):
         stack = self.stack()
         if arguments.get("mode", stack.getProperty("printing_mode", "value")) != stack.getProperty("printing_mode", "value"):
@@ -365,8 +379,10 @@ class SlicerAPI:
         if backend is None:
             fail("Backend выбранного режима недоступен", "SLICE_FAILED", 409)
         operation_id = uid()
-        snapshot = self.get_scene_snapshot()["snapshot_ref"]
-        self._operation(session_id, operation_id, {"kind": "slice", "plan_id": plan_id, "status": "slicing", "progress": None, "snapshot_ref": snapshot})
+        print_snapshot = self.get_print_context()
+        snapshot = print_snapshot["snapshot_ref"]
+        self._operation(session_id, operation_id, {"kind": "slice", "plan_id": plan_id, "status": "slicing", "progress": None,
+                                                 "snapshot_ref": snapshot, "print_snapshot": print_snapshot})
         self.slice_active = (session_id, operation_id, backend)
         def progress(amount):
             if not self.slice_active or self.slice_active[1] != operation_id:

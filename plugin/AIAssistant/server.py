@@ -45,6 +45,9 @@ class LocalServer(ThreadingMixIn, HTTPServer):
         self.tools = Tools(store, bridge)
         self.mcp = MCP(self.tools)
         self.plans = Plans(self)
+        from .print_feedback import PrintFeedback
+        self.print_feedback = PrintFeedback(self)
+        self.tools.experience = self.print_feedback.db
         self.tools.authorize_change = self.plans.authorize
         self.runner = Runner(self)
         self.bridge.on_slice_failure = lambda sid, oid: self.runner.start(sid, "slice-error-" + oid)
@@ -285,6 +288,32 @@ class Handler(BaseHTTPRequestHandler):
         from .agent.contracts import validate, obj, ID
         from .session import uid
         server, store = self.server, self.server.store
+        if path == "/api/experience" and method == "GET":
+            return server.print_feedback.db.library(), 200
+        feedback_parts = path.strip("/").split("/")
+        if len(feedback_parts) >= 4 and feedback_parts[:2] == ["api", "sessions"] and feedback_parts[3] == "print-feedback":
+            sid = feedback_parts[2]
+            store.get(sid)
+            feedback = server.print_feedback
+            if len(feedback_parts) == 4:
+                if method == "GET":
+                    return feedback.state(sid), 200
+                if method == "POST":
+                    return feedback.report(sid, self._json()), 201
+            if len(feedback_parts) == 6 and method == "POST":
+                identifier, command = feedback_parts[4:]
+                body = self._json()
+                if command == "diagnose":
+                    return feedback.propose(sid, identifier, body), 201
+                if command in ("apply", "rollback"):
+                    validate(body, obj({"consent": {"type": "boolean", "enum": [True]}}, ["consent"]))
+                    return feedback.apply(sid, identifier, body["consent"], command == "rollback"), 200
+                if command == "repeat-plan":
+                    validate(body, obj())
+                    return feedback.repeat_plan(sid, identifier), 201
+                if command == "evaluate":
+                    return feedback.evaluate(sid, identifier, body), 200
+            raise ApiError("Маршрут обратной связи не найден", 404)
         if path == "/api/sessions/merge" and method == "POST":
             from .agent.contracts import array, TEXT
             body = self._json()

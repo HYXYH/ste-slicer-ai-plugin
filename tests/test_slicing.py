@@ -63,6 +63,8 @@ class SlicingTests(unittest.TestCase):
                                             on_slice_failure=self.failure)
         self.api = SlicerAPI(self.bridge)
         self.api.get_scene_snapshot = mock.Mock(side_effect=lambda: {"snapshot_ref": copy.deepcopy(self.snapshot_ref)})
+        self.api.get_print_context = mock.Mock(side_effect=lambda: {"snapshot_ref": copy.deepcopy(self.snapshot_ref),
+                                                                   "context": {}, "settings": [], "objects": []})
         backend_module = types.ModuleType("UM.Backend.Backend")
         backend_module.BackendState = BackendState
         modules = {"UM": types.ModuleType("UM"), "UM.Backend": types.ModuleType("UM.Backend"),

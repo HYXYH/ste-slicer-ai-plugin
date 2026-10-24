@@ -15,6 +15,7 @@ class Tools:
     def __init__(self, store, bridge):
         self.store, self.bridge = store, bridge
         self.knowledge = Knowledge()
+        self.experience = None
         self.registry = {}
         self.authorize_change = None
         self.add("get_scene_snapshot", "Прочитать всю сцену, размеры и преобразования в мм", {"object_ids": array(ID)})
@@ -24,6 +25,7 @@ class Tools:
         self.add("list_materials", "Совместимый каталог; не подтверждает наличие катушки", dict(PAGE, **{k: CONFIG[k] for k in ("extruder_id", "mode")}))
         self.add("find_compatible_profiles", "Каталог реальных профилей", dict(PAGE, **CONFIG))
         self.add("search_knowledge", "Найти экспертные правила и пробелы знаний", dict(PAGE, query=TEXT, conditions={"type": "object"}, decision=ID), ["query"])
+        self.add("search_print_experience", "Найти наблюдения и подтверждённые исправления в совместимых условиях текущей сцены")
         self.add("get_operation_status", "Состояние длительной операции", {"operation_id": ID}, ["operation_id"])
         self.add("get_slice_result", "Время и расход актуального слайсинга", {"operation_id": ID}, ["operation_id"])
         changes = {
@@ -80,7 +82,9 @@ class Tools:
             if self.authorize_change is None:
                 fail("Нужно согласие на план", "APPROVAL_REQUIRED", 403)
             return self.authorize_change(name, arguments, context)
-        if name == "search_knowledge":
+        if name == "search_print_experience":
+            data = self.experience.find(self.bridge.call("get_print_context", {})) if self.experience else {"observations": [], "lessons": []}
+        elif name == "search_knowledge":
             data = self.knowledge.search(**arguments)
         elif name in ("get_operation_status", "get_slice_result"):
             sid = context.get("session_id")

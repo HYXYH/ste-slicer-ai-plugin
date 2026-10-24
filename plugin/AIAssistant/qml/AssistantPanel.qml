@@ -116,7 +116,7 @@ Rectangle {
                     anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 12
                     spacing: 12
                     Repeater {
-                        model: [{title:"Новый чат",icon:"NewChat.svg",action:"new"}, {title:root.v.chats ? "Назад" : "Все чаты",icon:root.v.chats ? "Back.svg" : "Chats.svg",action:"chats"}, {title:"LLM",icon:"Settings.svg",action:"settings"}, {title:root.v.analytics ? "Назад" : "Аналитика",icon:root.v.analytics ? "Back.svg" : "Analytics.svg",action:"analytics"}]
+                        model: [{title:"Новый чат",icon:"NewChat.svg",action:"new"}, {title:root.v.chats ? "Назад" : "Все чаты",icon:root.v.chats ? "Back.svg" : "Chats.svg",action:"chats"}, {title:"LLM",icon:"Settings.svg",action:"settings"}, {title:"Опыт печати",icon:"Cube.svg",action:"experience"}, {title:root.v.analytics ? "Назад" : "Аналитика",icon:root.v.analytics ? "Back.svg" : "Analytics.svg",action:"analytics"}]
                         AssistantNavButton {
                             width: parent.width
                             text: modelData.title
@@ -125,6 +125,7 @@ Rectangle {
                                 if (modelData.action === "new") { root.modal=""; root.act("newChat"); }
                                 else if (modelData.action === "chats") { root.modal=""; root.v.chats ? root.act("closeChats") : root.act("showChats"); }
                                 else if (modelData.action === "settings") { root.modal="settings"; root.fillSettings(); root.act("loadSettings"); }
+                                else if (modelData.action === "experience") { root.modal=""; root.act("showPrintExperience"); }
                                 else if (root.v.analytics) root.act("chat");
                                 else if (root.backend) root.backend.loadAnalytics(30);
                             }
@@ -237,6 +238,7 @@ Rectangle {
                             onLinkActivated:root.backend.invokeLink(link)
                         }
                         AssistantButton { visible:!!root.v.active; text:"Остановить"; compact:true; enabled:!root.v.busy; onClicked:root.act("cancel") }
+                        AssistantButton { text:"Сообщить о результате печати"; enabled:!!root.v.sessionId && !root.v.busy && !root.v.active; onClicked:root.act("reportPrintResult") }
                         AssistantCard {
                             property var recovery:root.v.analysisAction || ({})
                             visible:!!recovery.kind

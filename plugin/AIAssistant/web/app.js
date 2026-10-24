@@ -178,8 +178,10 @@ function renderSession(session) {
       group.append(node("summary", "", message.summary));
       message.operations.forEach(action => {
         const item = node("p", "tool-event");
+        item.style.cssText = "display:flex;align-items:baseline;white-space:nowrap;overflow:hidden;min-width:0";
         const status = {tool_finished:"готово",tool_failed:"ошибка",tool_started:"выполняется",interrupted:"прервано"}[action.status];
-        const link = node("a", "", action.command + " · " + status);
+        const link = node("a", "", action.tool);
+        link.style.cssText = "flex-shrink:0";
         link.href = "#";
         link.onclick = event => {
           event.preventDefault();
@@ -188,7 +190,11 @@ function renderSession(session) {
           $("document-preview").textContent = JSON.stringify(records, null, 2);
           $("document-dialog").showModal();
         };
-        item.append(link);
+        const argumentsText = node("span", "", action.command.slice(action.tool.length + 1, -1));
+        argumentsText.style.cssText = "overflow:hidden;text-overflow:ellipsis;min-width:0";
+        const ending = node("span", "", ") · " + status);
+        ending.style.flexShrink = "0";
+        item.append(link, node("span", "", "("), argumentsText, ending);
         group.append(item);
       });
       area.append(group);

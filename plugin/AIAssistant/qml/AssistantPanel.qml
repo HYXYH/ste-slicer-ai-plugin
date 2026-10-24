@@ -101,7 +101,7 @@ Rectangle {
                     Rectangle { width:7; height:7; radius:4; color:root.v.active ? "#f0b442" : "#40b987" }
                     Text { Layout.fillWidth:true; text:root.v.status || "Подключение…"; color:"#748a9c"; font.pixelSize:11; elide:Text.ElideRight }
                     Text { visible:root.v.state === "slicing"; text:root.backend && root.backend.sliceProgress >= 0 ? Math.round(root.backend.sliceProgress * 100) + "%" : "Проверка настроек…"; color:"#1683c7"; font.pixelSize:11 }
-                    AssistantButton { compact:true; text:root.assessment.score === undefined ? "Данные…" : "Данные " + root.assessment.score + "/100"; onClicked: { root.details=true; rightPane.contentY=assessmentCard.y; } }
+                    AssistantButton { compact:true; text:root.assessment.score === undefined ? "Готовность данных…" : "Готовность данных " + root.assessment.score + "/100"; onClicked: { root.details=true; rightPane.contentY=assessmentCard.y; } }
                     AssistantButton { compact:true; text:root.v.active ? "Остановить" : (root.v.calibrationFor || {}).session_id ? "Подготовить план куба" : "Повторить анализ"; enabled:!!root.v.sessionId && !root.v.busy; onClicked:root.v.active ? root.act("cancel") : root.act("analyze") }
                 }
                 ProgressBar { visible:root.v.state === "slicing"; Layout.fillWidth:true; indeterminate:!root.backend || root.backend.sliceProgress < 0; value:root.backend && root.backend.sliceProgress >= 0 ? root.backend.sliceProgress : 0 }
@@ -137,11 +137,17 @@ Rectangle {
                                             Column {
                                                 width:actionContent.width; spacing:4
                                                 Text {
-                                                    width:parent.width
-                                                    text:(modelData.status === "tool_finished" ? "✓ " : modelData.status === "tool_failed" ? "! " : modelData.status === "interrupted" ? "■ " : "• ") + modelData.command + (modelData.duration_ms === undefined || modelData.duration_ms === null ? "" : " · " + (modelData.duration_ms / 1000).toFixed(1) + " с")
-                                                    textFormat:Text.PlainText; wrapMode:Text.Wrap
-                                                    color:modelData.status === "tool_failed" ? "#af6235" : "#167db4"; font.pixelSize:11; font.underline:true
-                                                    MouseArea { anchors.fill:parent; cursorShape:Qt.PointingHandCursor; onClicked:root.backend.showAction(modelData.start_event_id || "", modelData.finish_event_id || "") }
+                                                    id:commandLine; width:parent.width
+                                                    property string statusPrefix:modelData.status === "tool_finished" ? "✓ " : modelData.status === "tool_failed" ? "! " : modelData.status === "interrupted" ? "■ " : "• "
+                                                    property string durationText:modelData.duration_ms === undefined || modelData.duration_ms === null ? "" : " · " + (modelData.duration_ms / 1000).toFixed(1) + " с"
+                                                    property string argumentsText:modelData.command.slice(modelData.tool.length + 1, -1)
+                                                    function escaped(value) { return String(value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+                                                    text:escaped(statusPrefix) + '<a href="details" style="text-decoration:underline">' + escaped(modelData.tool) + '</a>(' + escaped(commandArguments.elidedText) + ')' + escaped(durationText)
+                                                    textFormat:Text.RichText; wrapMode:Text.NoWrap; maximumLineCount:1; clip:true
+                                                    color:modelData.status === "tool_failed" ? "#af6235" : "#54748d"; linkColor:"#167db4"; font.pixelSize:11
+                                                    onLinkActivated:if(link === "details" && root.backend) root.backend.showAction(modelData.start_event_id || "", modelData.finish_event_id || "")
+                                                    TextMetrics { id:commandFixed; font:commandLine.font; text:commandLine.statusPrefix + modelData.tool + "()" + commandLine.durationText }
+                                                    TextMetrics { id:commandArguments; font:commandLine.font; text:commandLine.argumentsText; elide:Qt.ElideRight; elideWidth:Math.max(0,commandLine.width - commandFixed.width - 4) }
                                                 }
                                             }
                                         }
@@ -239,40 +245,57 @@ Rectangle {
                     width:rightPane.width - 8; spacing:12
                     AssistantCard {
                         id:assessmentCard
-                        width:parent.width; title:"Данные"
+                        width:parent.width; title:"Готовность данных"
                         RowLayout {
                             Layout.fillWidth:true
-                            Text { text:root.assessment.score === undefined ? "—" : root.assessment.score + " / 100"; font.pixelSize:25; font.bold:true; color:root.assessment.status === "sufficient" ? "#13a974" : "#b17a2c" }
+                            Text { text:root.assessment.score === undefined ? "—" : root.assessment.score + " / 100"; font.pixelSize:25; font.bold:true; color:"#13a974" }
                             Item { Layout.fillWidth:true }
                         }
                         Text { Layout.fillWidth:true; text:root.assessment.status_text || "Собираем данные…"; textFormat:Text.PlainText; wrapMode:Text.Wrap; color:"#54748d"; font.pixelSize:11 }
                         Repeater {
                             model:root.assessment.components || []
-                            ColumnLayout {
-                                Layout.fillWidth:true; spacing:4
-                                RowLayout { Layout.fillWidth:true; Text { Layout.fillWidth:true; text:modelData.title; color:"#536d82"; font.pixelSize:11 } Text { text:modelData.score + "/" + modelData.maximum; color:"#6f8ba1"; font.pixelSize:10 } }
-                                Rectangle { Layout.fillWidth:true; height:4; radius:2; color:"#e7eef4"; Rectangle { width:parent.width * modelData.score / modelData.maximum; height:parent.height; color:"#36a2dc"; radius:2 } }
-                                Text { Layout.fillWidth:true; text:modelData.reason; color:"#99a8b3"; wrapMode:Text.Wrap; font.pixelSize:10 }
+                            RowLayout {
+                                id:componentRow
+                                property var component: modelData
+                                Layout.fillWidth:true; spacing:8
+                                Rectangle {
+                                    Layout.alignment:Qt.AlignTop
+                                    Layout.preferredWidth:28; Layout.preferredHeight:28; radius:8
+                                    color:componentRow.component.id === "geometry" ? "#eaf9f4" : "#edf7ff"
+                                    Text { anchors.centerIn:parent; text:componentRow.component.id === "geometry" ? "✓" : componentRow.component.id === "configuration" ? "◆" : "▣"; color:componentRow.component.id === "geometry" ? "#13a974" : "#008bd6"; font.pixelSize:18; font.bold:true }
+                                }
+                                ColumnLayout {
+                                    Layout.fillWidth:true; spacing:5
+                                    RowLayout {
+                                        Layout.fillWidth:true
+                                        Text { Layout.fillWidth:true; text:componentRow.component.title; wrapMode:Text.Wrap; color:"#36556e"; font.pixelSize:11; font.bold:true }
+                                        Text { text:componentRow.component.score + " / " + componentRow.component.maximum; color:"#536d82"; font.pixelSize:10; font.bold:true }
+                                    }
+                                    Rectangle { Layout.fillWidth:true; height:6; radius:3; color:"#edf2f6"; Rectangle { width:parent.width * componentRow.component.score / componentRow.component.maximum; height:parent.height; color:componentRow.component.id === "geometry" ? "#13a974" : "#36a2dc"; radius:3 } }
+                                    Repeater {
+                                        model:componentRow.component.details || []
+                                        ColumnLayout {
+                                            Layout.fillWidth:true; spacing:3
+                                            Text {
+                                                Layout.fillWidth:true
+                                                text:(modelData.warning ? "⚠ " : "• ") + modelData.text
+                                                textFormat:Text.PlainText; wrapMode:Text.Wrap
+                                                color:modelData.warning ? "#d68a24" : "#6b8193"; font.pixelSize:10
+                                                ToolTip.visible:sourceHover.containsMouse && !!modelData.source
+                                                ToolTip.delay:500; ToolTip.text:modelData.source || ""
+                                                MouseArea { id:sourceHover; anchors.fill:parent; hoverEnabled:true; acceptedButtons:Qt.NoButton }
+                                            }
+                                            AssistantButton { visible:!!modelData.field; text:"Уточнить"; compact:true; onClicked: { root.modal="assessment"; assessmentField.text=modelData.field; assessmentQuestion.text=modelData.question; assessmentValue.text=""; } }
+                                        }
+                                    }
+                                }
                             }
-                        }
-                        Repeater {
-                            model:root.assessment.conflicts || []
-                            Text { Layout.fillWidth:true; text:modelData; textFormat:Text.PlainText; wrapMode:Text.Wrap; color:"#af6235"; font.pixelSize:11 }
-                        }
-                        Repeater {
-                            model:Object.keys(root.assessment.fields || {}).filter(function(key) { return root.assessment.fields[key].known; })
-                            Text { Layout.fillWidth:true; text:(root.assessment.fields[modelData].values || []).join("; ") + " · " + (root.assessment.fields[modelData].sources || []).join(", "); textFormat:Text.PlainText; wrapMode:Text.Wrap; color:"#7990a3"; font.pixelSize:10 }
-                        }
-                        Text { Layout.fillWidth:true; text:root.assessment.meaning || "Собираем факты для оценки…"; wrapMode:Text.Wrap; color:"#8b9dab"; font.pixelSize:10 }
-                        Repeater {
-                            model:root.assessment.questions || []
-                            AssistantButton { Layout.fillWidth:true; text:modelData.label || ({load:"Уточнить нагрузку",temperature:"Уточнить температуру",environment:"Уточнить среду"})[modelData.field]; compact:true; onClicked: { root.modal = "assessment"; assessmentField.text = modelData.field; assessmentQuestion.text = modelData.text; assessmentValue.text = ""; } }
                         }
                     }
                     AssistantCard {
                         width:parent.width; title:"Предлагаемые параметры печати"
                         Text { visible:!(root.v.params || []).length; Layout.fillWidth:true; text:"Параметры появятся после анализа и проверки плана."; wrapMode:Text.Wrap; color:"#8b9dab"; font.pixelSize:11 }
-                        Text { visible:root.assessment.status !== "sufficient"; Layout.fillWidth:true; text:root.assessment.status === "conflict" ? "Требования противоречат друг другу. Уточните данные перед применением параметров." : "Недостаточно данных для подбора параметров. Ответьте на вопросы в чате или в карточке «Данные»."; wrapMode:Text.Wrap; color:"#af6235"; font.pixelSize:11 }
+                        Text { visible:root.assessment.status !== "sufficient"; Layout.fillWidth:true; text:root.assessment.status === "conflict" ? "Требования противоречат друг другу. Уточните данные перед применением параметров." : "Недостаточно данных для подбора параметров. Ответьте на вопросы в чате или в карточке «Готовность данных»."; wrapMode:Text.Wrap; color:"#af6235"; font.pixelSize:11 }
                         Text { visible:(root.v.params || []).length > 0 && root.assessment.status !== "sufficient"; Layout.fillWidth:true; text:"Предварительные параметры"; color:"#af6235"; font.pixelSize:11; font.bold:true }
                         Repeater {
                             model:root.v.params || []

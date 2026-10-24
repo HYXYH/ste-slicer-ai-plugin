@@ -180,6 +180,41 @@ class Workspace:
             row["sources"] = sorted(set("Из ТЗ: " + session["files"].get(ref["id"], {}).get("name", "документ")
                                         if sources.get(ref["id"], {}).get("file_id") else "Из сообщения"
                                         for ref in row["source_refs"]))
+        components[0]["details"] = [{"text": "Модель загружена, размеры определены" if geometry == 30 else components[0]["reason"],
+                                      "warning": geometry < 30, "source": "Из сцены STE Slicer"}]
+        if geometry == 30:
+            components[0]["details"] += [{"text": (o.get("name") or "Модель") + ": " + " × ".join("{:g}".format(v) for v in o["dimensions_mm"]) + " мм",
+                                           "warning": False, "source": "Из сцены STE Slicer"} for o in objects]
+        printer = context.get("printer") or {}
+        profile = context.get("profile") or {}
+        quality = profile.get("quality") or {}
+        custom = profile.get("custom") or {}
+        profile_name = profile.get("name") or custom.get("name") or quality.get("name") or process.get("profile_id")
+        materials = [(e.get("material") or {}).get("name") or (e.get("material") or {}).get("type") or (e.get("material") or {}).get("id")
+                     for e in context.get("extruders", []) if (e.get("material") or {}).get("id")]
+        components[1]["details"] = [
+            {"text": "Принтер: " + str(printer.get("name") or printer.get("id") or "не выбран"), "warning": not bool(printer), "source": "Из текущей конфигурации STE Slicer"},
+            {"text": "Материал: " + (", ".join(materials) if materials else "не выбран"), "warning": not bool(materials), "source": "Из текущей конфигурации STE Slicer"},
+            {"text": "Профиль: " + str(profile_name or "не выбран") + (" · совместимость не подтверждена" if profile_name and not compatible else ""),
+             "warning": not compatible, "source": "Из текущей конфигурации STE Slicer"}]
+        field_titles = {"purpose": "Назначение", "load": "Нагрузка", "temperature": "Рабочая температура",
+                        "environment": "Воздействие среды", "accuracy": "Требования к точности", "surface": "Требования к поверхности"}
+        components[2]["details"] = []
+        for key in ("purpose", "temperature", "load", "environment", "accuracy", "surface"):
+            row = fields[key]
+            value = "; ".join(dict.fromkeys(row["values"]))
+            if row["conflict"]:
+                value = "противоречивые значения" + (": " + value if value else "")
+            elif not row["known"]:
+                value = "не указаны" if key in ("accuracy", "surface") else "не указана" if key in ("load", "temperature") else "не указано"
+            elif not value:
+                value = "не применяется"
+            components[2]["details"].append({"text": field_titles[key] + ": " + value,
+                                               "warning": row["conflict"] or row["required"] and not row["known"],
+                                               "source": ", ".join(row["sources"]),
+                                               "field": key if row["required"] and not row["known"] else "", "question": FIELDS[key]})
+        components[2]["details"] += [{"text": c["reason"], "warning": True, "source": "Из карты требований"}
+                                     for c in session["task_map"].get("conflicts", []) if not c.get("resolved")]
         return {"version": 2, "score": score, "components": components, "fields": fields, "conflicts": data_conflicts,
                 "input_revision": session["input_revision"], "session_revision": session["revision"], "status": status,
                 "status_text": "Есть противоречия в данных" if data_conflicts else "Данных достаточно для подготовки плана" if status == "sufficient" else "Нужны дополнительные данные",

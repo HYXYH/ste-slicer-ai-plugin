@@ -100,8 +100,12 @@ def session_document(session, history=False, include_messages=True):
             body = doc.link(("▾ " if expanded else "▸ ") + message["summary"], "history", group_id=message["id"])
             if expanded:
                 for action in message["operations"]:
-                    body += doc.link(action["command"] + " · " + {"tool_finished": "готово", "tool_failed": "ошибка", "tool_started": "выполняется", "interrupted": "прервано"}[action["status"]],
-                                     "action", start_id=action["start_event_id"], finish_id=action["finish_event_id"])
+                    key = str(len(doc.actions))
+                    doc.actions[key] = {"kind": "action", "start_id": action["start_event_id"], "finish_id": action["finish_event_id"]}
+                    arguments = action["command"][len(action["tool"]) + 1:-1]
+                    arguments = arguments if len(arguments) <= 48 else arguments[:45] + "…"
+                    body += '<p style="white-space:nowrap"><a href="assistant:{}">{}</a>({}) · {}</p>'.format(
+                        key, text(action["tool"]), text(arguments), {"tool_finished": "готово", "tool_failed": "ошибка", "tool_started": "выполняется", "interrupted": "прервано"}[action["status"]])
             doc.parts.append(body)
             continue
         role = {"user": "Вы", "assistant": "Ассистент", "system": "Система"}.get(message["role"], "Сообщение")

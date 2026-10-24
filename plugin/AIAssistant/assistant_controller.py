@@ -32,6 +32,7 @@ class AssistantController(QObject):
         self.drafts, self.busy, self.pending = {}, set(), set()
         self.message, self.prompt, self.actions = "", None, {}
         self.history, self.analytics_mode, self.disposed = False, False, False
+        self.chats_mode, self.chats_return_id = False, None
         self.expanded_activity = set()
         self.expanded_requirements = set()
         self.days, self.last_report, self.last_assessment = 30, 0, 0
@@ -103,7 +104,7 @@ class AssistantController(QObject):
         self.current, self.session = sid, None
         self.receive_progress({})
         self.assessment, self.prompt = {}, None
-        self.analytics_mode, self.history = False, False
+        self.analytics_mode, self.chats_mode, self.history = False, False, False
         self.last_assessment = 0
         self.draftChanged.emit()
         self.update_buttons()
@@ -135,7 +136,7 @@ class AssistantController(QObject):
             sid = self.current
             routes.append((self.path(sid) + "/workspace", self.receive_session))
             changing = (self.session or {}).get("workflow_state") in ("applying", "slicing", "exporting", "importing", "waiting_import")
-            if not changing and not self.analytics_mode and time.monotonic() - self.last_assessment > 10:
+            if not changing and not self.analytics_mode and not self.chats_mode and time.monotonic() - self.last_assessment > 10:
                 routes.append((self.path(sid) + "/assessment", lambda value, sid=sid: self.receive_assessment(sid, value)))
         if self.analytics_mode and time.monotonic() - self.last_report > 10:
             self.loadAnalytics(self.days)
@@ -207,7 +208,7 @@ class AssistantController(QObject):
                       "pending": [session["files"][fid] for fid in self.draft_for(self.current)["files"] if fid in session.get("files", {})] if self.current else [],
                       "notice": self.message, "context": {k: v for k, v in self.context.items() if k != "updated_at"}, "params": params,
                       "planId": actionable_plan["id"] if actionable_plan else "", "planVersion": actionable_plan["version"] if actionable_plan else 0,
-                      "assessment": self.assessment, "analytics": self.analytics_mode, "report": report,
+                      "assessment": self.assessment, "analytics": self.analytics_mode, "chats": self.chats_mode, "report": report,
                       "calibrationFor": session.get("calibration_for", {}), "config": self.config, "configVersion": self.config_version, "prompt": self.prompt or {}}
         if self._view != view:
             self._view = view
@@ -220,6 +221,57 @@ class AssistantController(QObject):
     @pyqtSlot(str)
     def rename(self, title):
         self.client.call(self.path() + "/workspace", self.receive_session, "PATCH", {"title": title})
+
+    @pyqtSlot()
+    def showChats(self):
+        self.chats_return_id = self.current
+        self.chats_mode, self.analytics_mode = True, False
+        self.client.call("/api/sessions", self.receive_listing)
+        self.update_buttons()
+
+    @pyqtSlot()
+    def closeChats(self):
+        ids = [row["id"] for row in self.listing]
+        sid = self.chats_return_id if self.chats_return_id in ids else self.current if self.current in ids else ids[0] if ids else None
+        if sid and sid != self.current:
+            self.select(sid)
+        elif sid:
+            self.chats_mode = False
+            self.update_buttons()
+        else:
+            self.newChat()
+
+    @pyqtSlot(str, str)
+    def renameChat(self, sid, title):
+        def saved(value):
+            if sid == self.current:
+                self.receive_session(value)
+            self.client.call("/api/sessions", self.receive_listing)
+        self.client.call(self.path(sid) + "/workspace", saved, "PATCH", {"title": title})
+
+    @pyqtSlot(str)
+    def deleteChat(self, sid):
+        if sid in self.busy:
+            return
+        self.busy.add(sid)
+        def failed(error):
+            self.busy.discard(sid)
+            self.notice(error)
+        def deleted(value):
+            self.busy.discard(sid)
+            self.drafts.pop(sid, None)
+            self.expanded_activity = {key for key in self.expanded_activity if key[0] != sid}
+            self.expanded_requirements = {key for key in self.expanded_requirements if key[0] != sid}
+            self.listing = [row for row in self.listing if row["id"] != sid]
+            if self.current == sid:
+                self.current, self.session = None, None
+                self.assessment, self.prompt = {}, None
+                self.receive_progress({})
+                self.draftChanged.emit()
+            self.chats_mode, self.analytics_mode = True, False
+            self.notice(value.get("warning", ""))
+            self.client.call("/api/sessions", self.receive_listing)
+        self.client.call(self.path(sid), deleted, "DELETE", failure=failed)
 
     @pyqtSlot('QVariantList', str)
     def mergeChats(self, ids, title):
@@ -439,6 +491,7 @@ class AssistantController(QObject):
 
     @pyqtSlot(int)
     def loadAnalytics(self, days=30):
+        self.chats_mode = False
         self.analytics_mode, self.days = True, days
         def loaded(report):
             if self.days != days:
@@ -452,6 +505,7 @@ class AssistantController(QObject):
     @pyqtSlot()
     def chat(self):
         self.analytics_mode = False
+        self.chats_mode = False
         self.update_buttons()
 
     @pyqtSlot(str)

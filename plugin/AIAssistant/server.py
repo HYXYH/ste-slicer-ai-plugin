@@ -218,6 +218,8 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError("Маршрут не найден", 404)
         sid = parts[2]
         if len(parts) == 3:
+            if method == "DELETE":
+                return store.delete(sid), 200
             if method == "GET":
                 return store.get(sid), 200
             if method == "PATCH":

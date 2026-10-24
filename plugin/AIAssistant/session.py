@@ -3,6 +3,7 @@ import copy
 import datetime
 import json
 import os
+import re
 import shutil
 import threading
 import uuid
@@ -116,7 +117,7 @@ class SessionStore:
     def create(self, title="Новая задача"):
         with self.lock:
             session_id = uid()
-            session = {"id": session_id, "title": self._title(title),
+            session = {"id": session_id, "title": self._title(title), "title_manual": title.strip() != "Новая задача",
                        "created_at": now(), "updated_at": now(), "revision": 0,
                        "messages": [], "files": {}, "operations": {},
                        "task": {"description": "", "status": "draft"},
@@ -135,6 +136,13 @@ class SessionStore:
 
     def listing(self):
         with self.lock:
+            changed = False
+            for session in self.data["sessions"].values():
+                if self.auto_title(session):
+                    session["revision"] += 1
+                    changed = True
+            if changed:
+                self._save()
             rows = [{key: s[key] for key in ("id", "title", "updated_at")}
                     for s in self.data["sessions"].values()]
             return {"sessions": sorted(rows, key=lambda s: s["updated_at"], reverse=True),
@@ -151,8 +159,66 @@ class SessionStore:
         with self.lock:
             s = self._session(session_id)
             s["title"] = self._title(title)
+            s["title_manual"] = True
             self._touch(s)
             return self.get(session_id, compact=compact)
+
+    @staticmethod
+    def auto_title(session, summary=""):
+        if session["title"] != "Новая задача" or session.get("title_manual"):
+            return False
+        from .task_data import field_for
+        from .user_view import display_value
+        task = session.get("task_map", {})
+        purpose = next((r["value"] for r in task.get("requirements", []) if field_for(r["key"]) == "purpose" and r.get("status") == "known"), None)
+        summary = purpose or (task.get("steps", {}).get("requirements") or {}).get("summary") or summary
+        if not summary:
+            return False
+        title = re.sub(r"\s+", " ", display_value(summary)).strip(" .\n")
+        title = re.sub(r"^(?:Я понял задачу так:|Требуется|Нужно)\s*", "", title, flags=re.I)
+        if not title:
+            return False
+        if len(title) > 70:
+            title = title[:67].rsplit(" ", 1)[0] + "…"
+        created = datetime.datetime.strptime(session["created_at"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc).astimezone()
+        session["title"] = title[0].upper() + title[1:] + " · " + created.strftime("%d.%m, %H:%M")
+        return True
+
+    def delete(self, session_id):
+        with self.lock:
+            session = self._session(session_id)
+            if any(run["status"] in ("queued", "running") for run in session.get("runs", {}).values()) or session.get("workflow_state") in (
+                    "applying", "slicing", "exporting", "importing", "waiting_import") or any(op["status"] in (
+                    "queued", "importing", "running", "applying", "slicing", "exporting") for op in session.get("operations", {}).values()):
+                raise ApiError("Дождитесь завершения операций в этом чате перед удалением", 409)
+            uploads = os.path.realpath(os.path.join(self.root, "uploads")) + os.sep
+            folder = os.path.realpath(os.path.join(uploads, session_id))
+            tombstone = os.path.realpath(os.path.join(uploads, ".deleted-" + uid()))
+            if not folder.startswith(uploads) or not tombstone.startswith(uploads) or os.path.basename(session_id) != session_id:
+                raise ApiError("Недопустимый путь вложений чата", 409)
+            moved = os.path.isdir(folder)
+            if moved:
+                os.rename(folder, tombstone)
+            previous_active = self.data["active_session_id"]
+            self.data["sessions"].pop(session_id)
+            if previous_active == session_id:
+                remaining = sorted(self.data["sessions"].values(), key=lambda row: row["updated_at"], reverse=True)
+                self.data["active_session_id"] = remaining[0]["id"] if remaining else None
+            try:
+                self._save()
+            except Exception:
+                self.data["sessions"][session_id] = session
+                self.data["active_session_id"] = previous_active
+                if moved:
+                    os.rename(tombstone, folder)
+                raise
+            warning = ""
+            if moved:
+                try:
+                    shutil.rmtree(tombstone)
+                except OSError:
+                    warning = "Чат удалён, но часть вложений занята другим процессом и осталась в служебной папке"
+            return {"deleted_id": session_id, "active_session_id": self.data["active_session_id"], "warning": warning}
 
     def get(self, session_id, compact=False):
         with self.lock:

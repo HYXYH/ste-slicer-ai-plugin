@@ -16,13 +16,14 @@ QNetworkAccessManager в `assistant_controller.py`. Ожидание ответ�
 Stage предоставляет `stageId`, `mainComponent`, `sidebarComponent`, `assistant`.
 Встроенная панель Prepare переиспользуется, файлы приложения не патчатся.
 
-## Чаты, скор и калибровка
+## Чаты, данные и калибровка
 
 | Метод и путь | Тело | Результат |
 | --- | --- | --- |
 | POST `/api/sessions/merge` | request_id, session_ids (2–10 уникальных ID), title | Новый чат с копиями сообщений и файлов; исходные чаты сохранены, согласия и планы отсутствуют |
 | GET `/api/sessions/{sid}/assessment` | Нет | version=2, score, components (30/30/40), fields с источниками, conflicts, status, status_text, weakest, questions, calibration, calibration_questions, process_signature, meaning |
 | PATCH `/api/sessions/{sid}/assessment` | answers | Пересчитанная полнота данных; ответы добавлены в пользовательскую историю и общую карту требований. Порог не поддерживается |
+| DELETE `/api/sessions/{sid}` | Нет | deleted_id, active_session_id, warning; удаляет историю и папку вложений чата, не меняет сцену. Активные операции возвращают 409 |
 | POST `/api/sessions/{sid}/calibration` | request_id | Новая задача с кубом 20 мм и ссылкой calibration_for на исходную |
 | POST `/api/sessions/{sid}/calibration/plan` | request_id | Проверенный план без изменения параметров; импорт куба и отсутствие чужих моделей обязательны |
 | POST `/api/sessions/{sid}/calibration/result` | x_mm, y_mm, z_mm, adhesion_ok, layers_ok, surface_ok, printed=true, process_signature | Сохранённая запись измерений после расчёта куба |

@@ -10,6 +10,8 @@ Rectangle {
     property var assessment: v.assessment || ({})
     property string modal: ""
     property var selectedChats: []
+    property string deleteChatId: ""
+    property string deleteChatTitle: ""
     property bool details: false
     property int settingsVersion: -1
     property bool followTail: true
@@ -31,7 +33,7 @@ Rectangle {
     }
     onVChanged: {
         if (modal === "settings" && settingsVersion !== v.configVersion) fillSettings();
-        if (v.prompt && v.prompt.kind) { promptInput.text = ""; modal = "prompt"; }
+        if (v.prompt && v.prompt.kind && !v.chats && !v.analytics) { promptInput.text = ""; modal = "prompt"; }
         tailTimer.restart();
     }
     Connections {
@@ -41,7 +43,7 @@ Rectangle {
     Timer { id: tailTimer; interval: 20; onTriggered: if (root.followTail) conversation.contentY = Math.max(0, conversation.contentHeight - conversation.height); }
     DropArea {
         anchors.fill: parent
-        enabled: !root.v.analytics && !root.v.busy
+        enabled: !root.v.analytics && !root.v.chats && !root.v.busy
         onDropped: if (drop.hasUrls && root.backend) root.backend.uploadUrls(drop.urls)
     }
     ColumnLayout {
@@ -55,10 +57,10 @@ Rectangle {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 3
-                Text { text: root.v.analytics ? "Аналитика подготовки" : "AI Print Assistant"; color: "#123858"; font.family: "Segoe UI"; font.pixelSize: 20; font.bold: true }
-                Text { Layout.fillWidth: true; text: root.v.title || "Опишите задачу — ассистент подберёт параметры печати"; color: "#7d8e9f"; font.pixelSize: 11; elide: Text.ElideRight }
+                Text { text: root.v.chats ? "Все чаты" : root.v.analytics ? "Аналитика подготовки" : "AI Print Assistant"; color: "#123858"; font.family: "Segoe UI"; font.pixelSize: root.v.chats ? 30 : 20; font.bold: true }
+                Text { visible:!root.v.chats; Layout.fillWidth: true; text: root.v.title || "Опишите задачу — ассистент подберёт параметры печати"; color: "#7d8e9f"; font.pixelSize: 11; elide: Text.ElideRight }
             }
-            AssistantButton { visible: root.width < 850 && !root.v.analytics; text: root.details ? "Чат" : "Параметры"; onClicked: root.details = !root.details }
+            AssistantButton { visible: root.width < 850 && !root.v.analytics && !root.v.chats; text: root.details ? "Чат" : "Параметры"; onClicked: root.details = !root.details }
         }
         Rectangle {
             visible: (root.v.notice || "") !== ""
@@ -77,14 +79,14 @@ Rectangle {
                     anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 12
                     spacing: 12
                     Repeater {
-                        model: [{title:"Новый чат",icon:"NewChat.svg",action:"new"}, {title:"Все чаты",icon:"Chats.svg",action:"chats"}, {title:"LLM",icon:"Settings.svg",action:"settings"}, {title:root.v.analytics ? "Назад" : "Аналитика",icon:root.v.analytics ? "Back.svg" : "Analytics.svg",action:"analytics"}]
+                        model: [{title:"Новый чат",icon:"NewChat.svg",action:"new"}, {title:root.v.chats ? "Назад" : "Все чаты",icon:root.v.chats ? "Back.svg" : "Chats.svg",action:"chats"}, {title:"LLM",icon:"Settings.svg",action:"settings"}, {title:root.v.analytics ? "Назад" : "Аналитика",icon:root.v.analytics ? "Back.svg" : "Analytics.svg",action:"analytics"}]
                         AssistantNavButton {
                             width: parent.width
                             text: modelData.title
                             iconSource: "icons/" + modelData.icon
                             onClicked: {
                                 if (modelData.action === "new") { root.modal=""; root.act("newChat"); }
-                                else if (modelData.action === "chats") { root.selectedChats=[]; root.modal="chats"; }
+                                else if (modelData.action === "chats") { root.modal=""; root.v.chats ? root.act("closeChats") : root.act("showChats"); }
                                 else if (modelData.action === "settings") { root.modal="settings"; root.fillSettings(); root.act("loadSettings"); }
                                 else if (root.v.analytics) root.act("chat");
                                 else if (root.backend) root.backend.loadAnalytics(30);
@@ -96,7 +98,7 @@ Rectangle {
             Item {
                 Layout.fillWidth:true; Layout.fillHeight:true
                 RowLayout {
-                    anchors.fill:parent; visible:!root.v.analytics; spacing:12
+                    anchors.fill:parent; visible:!root.v.analytics && !root.v.chats; spacing:12
             ColumnLayout {
                 visible: root.width >= 850 || !root.details
                 Layout.fillWidth: true; Layout.fillHeight: true
@@ -335,6 +337,11 @@ Rectangle {
                 }
             }
         }
+        AssistantChatsView {
+            anchors.fill:parent; visible:!!root.v.chats
+            backend:root.backend; sessions:root.v.sessions || []; currentId:root.v.sessionId || ""
+            onDeleteRequested: { root.deleteChatId=sessionId; root.deleteChatTitle=title; root.modal="deleteChat"; }
+        }
         ColumnLayout {
             visible:!!root.v.analytics
             anchors.fill:parent; spacing:10
@@ -377,23 +384,15 @@ Rectangle {
                     onWidthChanged:fitWidths()
                     onChildrenChanged:fitWidths()
                     Component.onCompleted:fitWidths()
-                    RowLayout { Layout.fillWidth:true; Text { Layout.fillWidth:true; text:({chats:"Все чаты",settings:"Подключение LLM",prompt:(root.v.prompt || {}).title,assessment:"Условия эксплуатации",calibration:"Калибровочный куб",measurements:"Измерения после ручной печати"})[root.modal] || ""; wrapMode:Text.Wrap; color:"#1b4566"; font.pixelSize:18; font.bold:true } AssistantButton { text:"Закрыть"; compact:true; onClicked: { root.modal=""; secret.text=""; root.act("dismissPrompt"); } } }
+                    RowLayout { Layout.fillWidth:true; Text { Layout.fillWidth:true; text:({deleteChat:"Удалить чат?",settings:"Подключение LLM",prompt:(root.v.prompt || {}).title,assessment:"Условия эксплуатации",calibration:"Калибровочный куб",measurements:"Измерения после ручной печати"})[root.modal] || ""; wrapMode:Text.Wrap; color:"#1b4566"; font.pixelSize:18; font.bold:true } AssistantButton { text:"Закрыть"; compact:true; onClicked: { root.modal=""; secret.text=""; root.act("dismissPrompt"); } } }
                     ColumnLayout {
-                        visible:root.modal === "chats"; Layout.fillWidth:true; spacing:8
-                        RowLayout { AssistantButton { text:"Новый чат"; primary:true; onClicked: { root.modal=""; root.act("newChat"); } } Text { text:"Выберите несколько для объединения"; color:"#879dac"; font.pixelSize:11 } }
-                        Repeater {
-                            model:root.v.sessions || []
-                            RowLayout {
-                                Layout.fillWidth:true
-                                CheckBox { checked:root.selectedChats.indexOf(modelData.id) >= 0; onToggled:root.toggleChat(modelData.id,checked) }
-                                AssistantButton { Layout.fillWidth:true; text:modelData.title; onClicked: { root.modal=""; root.backend.select(modelData.id); } }
-                            }
+                        visible:root.modal === "deleteChat"; Layout.fillWidth:true; spacing:12
+                        Text { Layout.fillWidth:true; text:root.deleteChatTitle; textFormat:Text.PlainText; wrapMode:Text.Wrap; font.bold:true; color:"#36556e" }
+                        Text { Layout.fillWidth:true; text:"Переписка и вложения этого чата будут удалены без возможности восстановления. Модели в сцене и экспортированные файлы сохранятся."; wrapMode:Text.Wrap; color:"#75899c"; font.pixelSize:12 }
+                        RowLayout {
+                            AssistantButton { text:"Отмена"; onClicked:root.modal="" }
+                            AssistantButton { text:"Удалить чат"; primary:true; onClicked: { if(root.backend) root.backend.deleteChat(root.deleteChatId); root.modal=""; } }
                         }
-                        TextField { id:mergeTitle; Layout.fillWidth:true; text:"Объединённая задача"; placeholderText:"Название общего чата" }
-                        Text { Layout.fillWidth:true; text:"Создастся новый чат с копией переписки и вложений. Исходные чаты сохранятся. Старые планы и согласия не переносятся."; wrapMode:Text.Wrap; color:"#879dac"; font.pixelSize:11 }
-                        AssistantButton { text:"Объединить выбранные (" + root.selectedChats.length + ")"; enabled:root.selectedChats.length >= 2; primary:true; onClicked: { root.backend.mergeChats(root.selectedChats,mergeTitle.text); root.modal=""; } }
-                        TextField { id:renameTitle; Layout.fillWidth:true; placeholderText:"Новое название текущего чата" }
-                        AssistantButton { text:"Переименовать текущий чат"; enabled:renameTitle.text.length>0; onClicked: { root.backend.rename(renameTitle.text); root.modal=""; } }
                     }
                     ColumnLayout {
                         visible:root.modal === "settings"; Layout.fillWidth:true

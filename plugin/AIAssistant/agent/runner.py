@@ -374,6 +374,7 @@ class Runner:
                     fail("Запуск устарел", "CANCELLED", 409)
                 s["workflow_state"] = state
                 s["runs"][rid].update(status="completed", finished_at=now())
+                self.store.auto_title(s, proposal["summary"])
                 s["messages"].append({"id": uid(), "role": "assistant", "created_at": now(), "run_id": rid,
                                       "text": proposal["summary"] if waiting else proposal["summary"] + "\n\nПроверка: " + READINESS_NAMES[updated["readiness"]["status"]] +
                                       (". " + "; ".join(updated["readiness"]["reasons"]) if updated["readiness"]["reasons"] else "") +

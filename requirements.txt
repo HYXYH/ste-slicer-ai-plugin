@@ -1,3 +1,4 @@
 # Shared development environment for tests and tools (project-root .venv).
 # No third-party dependencies are currently required: tests and tools use stdlib.
 # PyQt5, UM and steslicer are provided by the STE Slicer runtime, not by this venv.
+# Optional offscreen Qt UI tests: install requirements-dev.txt in this same .venv.

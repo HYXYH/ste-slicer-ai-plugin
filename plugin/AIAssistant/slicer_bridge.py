@@ -110,14 +110,19 @@ class SlicerBridge:
 
     def _commands(self):
         with self.lock:
-            callbacks = list(self.callbacks)
-            self.callbacks.clear()
             command = self.commands.popleft() if self.commands else None
-        for callback in callbacks:
+        deadline = time.monotonic() + .008
+        for unused in range(4):
+            with self.lock:
+                callback = self.callbacks.popleft() if self.callbacks else None
+            if callback is None:
+                break
             try:
                 callback()
             except Exception:
                 log.exception("Assistant backend callback failed")
+            if time.monotonic() >= deadline:
+                break
         if command:
             try:
                 if command["abandoned"]:
@@ -147,7 +152,8 @@ class SlicerBridge:
             self.context = context
         try:
             self.store.reconcile_scene(set(str(id(n)) for n in self._nodes()))
-            if self.app.getGlobalContainerStack() is not None:
+            # Completion always takes a fresh snapshot. Passive polling must not compete with slicing.
+            if self.app.getGlobalContainerStack() is not None and not self.api.slice_active and self.ticks % 40 == 0:
                 self.store.invalidate_snapshot(self.api.get_scene_snapshot()["snapshot_ref"])
         except Exception:
             log.exception("Cannot reconcile scene")

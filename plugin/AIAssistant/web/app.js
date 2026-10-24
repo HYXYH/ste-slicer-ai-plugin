@@ -365,7 +365,8 @@ function renderWorkflow(session, area) {
   const sid = session.id, map = session.task_map;
   if (!map) return;
   const latestRun = Object.values(session.runs || {}).sort((a,b) => (a.created_at || "").localeCompare(b.created_at || "")).slice(-1)[0];
-  const currentEvents = latestRun ? session.events.filter(e => e.run_id === latestRun.id || Date.parse(e.created_at) >= Date.parse(latestRun.created_at)) : session.events;
+  const currentEvents = latestRun ? session.events.filter(e => e.run_id === latestRun.id ||
+    (!Object.prototype.hasOwnProperty.call(session.runs || {}, e.run_id) && Date.parse(e.created_at) >= Date.parse(latestRun.created_at))) : session.events;
   const currentEventIds = new Set(currentEvents.map(e => e.id));
   const active = latestRun && ["queued", "running"].includes(latestRun.status);
   if (active) {

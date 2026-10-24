@@ -6,6 +6,35 @@ JSON не допускает повторных ключей, NaN и Infinity. �
 `error` и добавляет `code`, `details`. Неизвестный ID сессии или операции даёт 404.
 Ключи и внутренние пути вложений не выдаются клиенту.
 
+Вкладка `assistant_stage.py` / QML использует тот же HTTP API через асинхронный
+QNetworkAccessManager в `assistant_controller.py`. Ожидание ответа и потоковая отправка QFile не блокируют
+главный поток Qt. URL остаётся локальным, токен передаётся заголовком;
+перенаправления и системный прокси отключены. Обработчики действий создаются
+из серверного состояния. Текст сообщений экранируется, произвольные ссылки
+и внешние ресурсы не открываются. Возврат в Prepare останавливает опрос вкладки,
+сохраняя анализ и черновики; завершение приложения останавливает клиент до сервера.
+Stage предоставляет `stageId`, `mainComponent`, `sidebarComponent`, `assistant`.
+Встроенная панель Prepare переиспользуется, файлы приложения не патчатся.
+
+## Чаты, скор и калибровка
+
+| Метод и путь | Тело | Результат |
+| --- | --- | --- |
+| POST `/api/sessions/merge` | request_id, session_ids (2–10 уникальных ID), title | Новый чат с копиями сообщений и файлов; исходные чаты сохранены, согласия и планы отсутствуют |
+| GET `/api/sessions/{sid}/assessment` | Нет | version, score, threshold, components, weakest, questions, calibration, process_signature, meaning |
+| PATCH `/api/sessions/{sid}/assessment` | answers?, threshold? (1–100) | Пересчитанная оценка; ответы добавлены в пользовательскую историю и требуют нового анализа плана |
+| POST `/api/sessions/{sid}/calibration` | request_id | Новая задача с кубом 20 мм и ссылкой calibration_for на исходную |
+| POST `/api/sessions/{sid}/calibration/plan` | request_id | Проверенный план без изменения параметров; импорт куба и отсутствие чужих моделей обязательны |
+| POST `/api/sessions/{sid}/calibration/result` | x_mm, y_mm, z_mm, adhesion_ok, layers_ok, surface_ok, printed=true, process_signature | Сохранённая запись измерений после расчёта куба |
+
+`answers` принимает load, temperature, environment и наблюдения dimensions_check,
+adhesion_context, layer_context, surface_context. Текст наблюдения не засчитывает
+неуспешную проверку как успешную. Размеры конечные, 1–100 мм. Процесс должен
+совпасть с подготовленным кубом и текущим слайсером, иначе STALE_INPUT.
+Внутреннее чтение `get_calibration_context` возвращает контекст и хеш всех
+эффективных настроек без геометрии, ID процесса и времени. В MCP оно не публикуется.
+Скор не меняет readiness, не разрешает применение и не отменяет проверки экспорта.
+
 ## Сохранённые маршруты
 
 `GET /api/context`; `GET/POST /api/sessions`; `GET/PATCH /api/sessions/{sid}`;
@@ -27,14 +56,14 @@ ID — непустая строка до 160 символов. POST/PATCH пр�
 
 | Метод и путь | Тело | Ответ |
 | --- | --- | --- |
-| GET `/api/settings/llm` | Нет | base_url, model, key_configured |
-| PATCH `/api/settings/llm` | base_url?, model?, api_key? | Безопасная часть настроек |
+| GET `/api/settings/llm` | Нет | base_url, model, pipeline, key_configured |
+| PATCH `/api/settings/llm` | base_url?, model?, api_key?, pipeline? | Безопасная часть настроек |
 | POST `/api/settings/llm/test` | session_id*, request_id* | 202: operation_id, session_id, state |
 | POST `/api/settings/llm/clear-key` | `{}` | Безопасная часть настроек |
 | GET `/api/sessions/{sid}/events?after=N` | Нет | events (до 100), last_seq |
 | POST `/api/sessions/{sid}/runs` | request_id* | 202: run_id, state |
 | POST `/api/sessions/{sid}/runs/{rid}/cancel` | `{}` | run_id, state=cancelled |
-| POST `/api/sessions/{sid}/answers` | request_id*, text?, answers?, assumptions?, include_object_ids?, manual_checks?, conflict_resolutions? | 202: run_id, state |
+| POST `/api/sessions/{sid}/answers` | request_id*, text?, answers?, assumptions?, include_object_ids?, manual_checks?, conflict_resolutions?, accept_risk? | 202: run_id, state |
 | GET `/api/sessions/{sid}/plans/{pid}` | Нет | Полный объект плана |
 | POST `/api/sessions/{sid}/plans/{pid}/approve` | version* (целое >=1) | План с серверным approval |
 | POST `/api/sessions/{sid}/plans/{pid}/apply` | request_id* | 202: plan_id, status=applying |
@@ -47,6 +76,14 @@ ID — непустая строка до 160 символов. POST/PATCH пр�
 В reason укажите метод, источник и результат фактической инженерной проверки.
 `conflict_resolutions`: `{id,reason}`. Противоречие сохраняется с причиной разрешения.
 `include_object_ids`: явное включение дополнительных моделей в задачу.
+`accept_risk`: `{reason}` с непустой причиной принятия инженерного риска прототипа.
+Это согласие не отменяет проверку профиля, настроек и свежести сцены.
+
+`pipeline`: `stepwise` (по умолчанию) или `single`. Пошаговый сценарий использует
+узкие схемы требований, уточнений, объяснения материала и итогового текста.
+После согласия с материалом сервер может выбрать его из совместимого каталога
+и повторно прочитать конфигурацию. Изменения настроек и расчёт требуют согласования
+плана. В режиме `single` модель возвращает полную карту задачи по общей схеме.
 
 Результат выбора папки читается через operations: `result.export_target_id`,
 `folder_name`, `overwrite` либо `cancelled`. Путь хранится только на сервере.
@@ -221,6 +258,16 @@ Object уже вернули HTTP 200 в настоящем шлюзе. JSON Sch
 поля и причиной, без полного ответа модели. История интерфейса показывает их
 отдельно от ошибок инструментов. Схема не подменяет проверку источников,
 инженерной достаточности, свежести сцены и пользовательского согласия.
+
+У неполного варианта profile_id может быть null. Сервер в этом случае добавляет
+profile_id в missing_fields и не допускает готовность к плану. Пустая строка
+по-прежнему недопустима. План отдельно проверяет наличие непустого ID профиля.
+TARGET_CONFIGURATION_UNKNOWN требует выбора доступной целевой конфигурации
+с повторным анализом. В режиме single ответ в чате сам по себе не меняет слайсер;
+stepwise может выбрать материал после отдельного согласия и перечитать конфигурацию.
+field вопроса должен совпадать с field уточняемого неизвестного.
+Поздние события старых известных run_id отображаются в предыдущих запусках,
+даже если их время позже начала текущего анализа.
 
 Неизвестный прогресс остаётся null. Нет обещания отменить штатный backend.
 Доступность режима в каталоге не подтверждает лицензию 5D.

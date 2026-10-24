@@ -4,6 +4,8 @@ import json
 import math
 import os
 import tempfile
+import threading
+import time
 import zipfile
 
 from .session import ApiError, uid, now
@@ -38,6 +40,7 @@ class SlicerAPI:
     def __init__(self, bridge):
         self.bridge, self.app, self.store = bridge, bridge.app, bridge.store
         self.exports, self.jobs, self.slice_active = {}, {}, None
+        self.progress_lock, self.pending_progress = threading.Lock(), {}
 
     def stack(self, target=None):
         stack = self.app.getGlobalContainerStack()
@@ -69,11 +72,7 @@ class SlicerAPI:
                 geometry.update(indices.tobytes())
             rotation = node.getOrientation()
             per_mesh = node.callDecoration("getStack")
-            attachments = []
-            for sid in self.store.listing()["sessions"]:
-                session = self.store.get(sid["id"])
-                attachments.extend({"session_id": session["id"], "file_id": f["id"]}
-                                   for f in session["files"].values() if oid in f.get("object_ids", []))
+            attachments = self.store.attachments_for_object(oid)
             objects.append({"id": oid, "name": node.getName(), "geometry_revision": geometry.hexdigest(),
                             "printable": True, "build_plate": node.callDecoration("getBuildPlateNumber"),
                             "position_mm": vector(node.getPosition()), "scale": vector(node.getScale()),
@@ -87,7 +86,8 @@ class SlicerAPI:
         stable_context = {k: v for k, v in context.items() if k != "updated_at"}
         scene = {"process_id": self.store.run_id, "objects": objects, "configuration": stable_context,
                  "effective_settings": settings, "active_build_plate": self.app.getMultiBuildPlateModel().activeBuildPlate}
-        reference = {"process_id": self.store.run_id, "fingerprint": digest(scene)}
+        physical_scene = dict(scene, objects=[{k: v for k, v in row.items() if k != "file_refs"} for row in objects])
+        reference = {"process_id": self.store.run_id, "fingerprint": digest(physical_scene)}
         scene.pop("effective_settings")
         if object_ids and not set(object_ids).issubset(set(o["id"] for o in objects)):
             fail("Целевой объект удалён", "OBJECT_NOT_FOUND", 409)
@@ -113,6 +113,16 @@ class SlicerAPI:
         return {"context": read_context(self.app), "target": target or {"scope": "global"},
                 "settings": {k: plain(stack.getProperty(k, "value")) for k in keys or []},
                 "snapshot_ref": self.get_scene_snapshot()["snapshot_ref"]}
+
+    def get_calibration_context(self):
+        from .slicer_bridge import read_context
+        stack = self.stack()
+        context = read_context(self.app)
+        settings = {scope.getId(): {k: plain(scope.getProperty(k, "value")) for k in sorted(scope.getAllKeys())}
+                    for scope in [stack] + list(stack.extruders.values())}
+        stable = {k: v for k, v in context.items() if k != "updated_at"}
+        return {"context": context, "profile_id": self.profile_id(),
+                "signature": digest({"version": 1, "configuration": stable, "settings": settings})}
 
     def _current_only(self, arguments):
         stack = self.stack()
@@ -347,10 +357,6 @@ class SlicerAPI:
             operation = session["operations"].setdefault(oid, {"id": oid, "session_id": sid, "created_at": now()})
             operation.update(values)
         self.store.edit(sid, update)
-        if not success and not stale and hasattr(self.bridge, "on_slice_failure"):
-            self.store.edit(sid, lambda session: session["sources"].update({oid: {"id": oid, "version": 1, "kind": "tool", "tool": "start_slicing",
-                            "data": {"code": "SLICE_FAILED", "message": "Backend не подготовил G-code. Нужен новый план с повторным согласием."}}}))
-            self.bridge.on_slice_failure(sid, oid)
 
     def start_slicing(self, session_id, plan_id):
         from UM.Backend.Backend import BackendState
@@ -364,24 +370,77 @@ class SlicerAPI:
         self._operation(session_id, operation_id, {"kind": "slice", "plan_id": plan_id, "status": "slicing", "progress": None, "snapshot_ref": snapshot})
         self.slice_active = (session_id, operation_id, backend)
         def progress(amount):
-            self.bridge.post(lambda: self._slice_progress(operation_id, amount))
+            if not self.slice_active or self.slice_active[1] != operation_id:
+                return
+            with self.progress_lock:
+                queued = operation_id in self.pending_progress
+                self.pending_progress[operation_id] = plain(amount)
+            if not queued:
+                self.bridge.post(lambda: self._flush_slice_progress(operation_id))
+        phase = {"launched": False, "processing": False}
         def state(value):
-            if value in (BackendState.Done, BackendState.Error, BackendState.Disabled):
+            if not phase["launched"]:
+                return
+            if value == BackendState.Processing:
+                phase["processing"] = True
+            # forceSlice first emits NotStarted itself; only a later reset is an interruption.
+            if value in (BackendState.Done, BackendState.Error, BackendState.Disabled) or (value == BackendState.NotStarted and phase["processing"]):
                 self.bridge.post(lambda: self._slice_finished(operation_id, value == BackendState.Done))
         self.slice_signals = (progress, state)
         backend.processingProgress.connect(progress)
         backend.backendStateChange.connect(state)
-        backend.forceSlice()
+        try:
+            self._launch_slice(operation_id, phase, time.monotonic() + 30)
+        except Exception:
+            backend.processingProgress.disconnect(progress)
+            backend.backendStateChange.disconnect(state)
+            self.slice_active = None
+            self._operation(session_id, operation_id, {"status": "error",
+                            "error": "Не удалось запустить слайсинг. Проверьте журнал STE Slicer."})
+            self.store.edit(session_id, lambda session: session.update(workflow_state="failed"))
+            raise
         return {"operation_id": operation_id, "status": "slicing", "snapshot_ref": snapshot}
 
-    def _slice_progress(self, operation_id, amount):
-        if self.slice_active and self.slice_active[1] == operation_id:
-            self._operation(self.slice_active[0], operation_id, {"progress": plain(amount)})
-
-    def _slice_finished(self, operation_id, success):
+    def _launch_slice(self, operation_id, phase, deadline):
         if not self.slice_active or self.slice_active[1] != operation_id:
             return
         sid, oid, backend = self.slice_active
+        checker = self.app.getMachineErrorChecker() if hasattr(self.app, "getMachineErrorChecker") else None
+        # 7.10 reschedules validation after setting writes. Starting early can cancel the engine.
+        if checker is not None and getattr(checker, "needToWaitForResult", False) is True:
+            if time.monotonic() >= deadline:
+                self._slice_finished(oid, False, "Проверка настроек STE Slicer не завершилась за 30 секунд. Проверьте сообщения приложения.")
+                return
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(250, lambda: self._resume_slice(oid, phase, deadline))
+            return
+        if self.get_scene_snapshot()["snapshot_ref"] != self.store.operation(sid, oid)["snapshot_ref"]:
+            self._slice_finished(oid, False)
+            return
+        phase["launched"] = True
+        backend.forceSlice()
+
+    def _resume_slice(self, operation_id, phase, deadline):
+        try:
+            self._launch_slice(operation_id, phase, deadline)
+        except Exception:
+            self._slice_finished(operation_id, False, "Не удалось запустить слайсинг после проверки настроек. Проверьте журнал STE Slicer.")
+
+    def _slice_progress(self, operation_id, amount):
+        if self.slice_active and self.slice_active[1] == operation_id:
+            self.store.progress(self.slice_active[0], operation_id, plain(amount))
+
+    def _flush_slice_progress(self, operation_id):
+        with self.progress_lock:
+            amount = self.pending_progress.pop(operation_id, None)
+        self._slice_progress(operation_id, amount)
+
+    def _slice_finished(self, operation_id, success, error=None):
+        if not self.slice_active or self.slice_active[1] != operation_id:
+            return
+        sid, oid, backend = self.slice_active
+        with self.progress_lock:
+            self.pending_progress.pop(oid, None)
         backend.processingProgress.disconnect(self.slice_signals[0])
         backend.backendStateChange.disconnect(self.slice_signals[1])
         self.slice_active = None
@@ -393,7 +452,7 @@ class SlicerAPI:
         success = success and bool(getattr(scene, "gcode_dict", {}).get(plate))
         stale = current != operation["snapshot_ref"]
         self._operation(sid, oid, {"status": "stale" if stale else "completed" if success else "error",
-                         "error": "Сцена изменилась" if stale else None if success else "Backend не подготовил G-code. Проверьте сообщения STE Slicer.",
+                           "error": "Сцена изменилась" if stale else None if success else error or "Backend не подготовил G-code. Проверьте сообщения STE Slicer.",
                          "result": {"time": {"value": sum(int(v) for v in information.printTimes().values()) if information.printTimes() and all(v.valid for v in information.printTimes().values()) else None, "unit": "s"},
                                     "material": {"values": plain(information.materialLengths), "unit": "m"}} if success else None})
         def update(session):
@@ -402,6 +461,10 @@ class SlicerAPI:
                                       "run_id": None, "created_at": now(), "type": "progress", "operation_id": oid,
                                       "message": "Расчёт завершён" if success and not stale else "Расчёт не дал актуального результата"})
         self.store.edit(sid, update)
+        if not success and not stale and hasattr(self.bridge, "on_slice_failure"):
+            self.store.edit(sid, lambda session: session["sources"].update({oid: {"id": oid, "version": 1, "kind": "tool", "tool": "start_slicing",
+                            "data": {"code": "SLICE_FAILED", "message": "Backend не подготовил G-code. Нужен новый план с повторным согласием."}}}))
+            self.bridge.on_slice_failure(sid, oid)
 
     def choose_export_target(self, session_id, overwrite=False):
         from PyQt5.QtWidgets import QFileDialog

@@ -27,7 +27,7 @@ ROW_SCHEMAS = {
     "assumptions": obj({"id": ID, "key": ID, "value": ANY_JSON, "unit": {"oneOf": [{"type": "string"}, {"type": "null"}]}, "reason": TEXT, "source_refs": REFS},
                        ["id", "key", "value", "unit", "reason", "source_refs"]),
     "conflicts": obj({"id": ID, "reason": TEXT, "record_ids": array(ID), "source_refs": REFS}, ["id", "reason", "record_ids", "source_refs"]),
-    "candidates": obj({"id": ID, "mode": MODE, "material_id": ID, "profile_id": ID, "extruder_id": ID, "orientation_proposal": ANY_JSON,
+    "candidates": obj({"id": ID, "mode": MODE, "material_id": ID, "profile_id": {"oneOf": [ID, {"type": "null"}]}, "extruder_id": ID, "orientation_proposal": ANY_JSON,
                        "requirement_checks": array(obj({"requirement_id": ID, "status": {"enum": ["pass", "fail", "unknown"]}, "source_refs": REFS}, ["requirement_id", "status", "source_refs"])),
                        "missing_fields": array(ID), "evidence_refs": REFS, "rejection_reasons": array(TEXT),
                        "assumption_ids": array(ID), "status": {"enum": ["possible", "rejected", "selected"]}, "source_refs": REFS},
@@ -89,6 +89,11 @@ def merge_proposal(task, proposal, sources):
                     fail("Вопрос должен объяснять влияние на решение", "INVALID_MODEL_OUTPUT")
             if collection == "candidates":
                 source_ids(row["evidence_refs"], sources, path + ".evidence_refs")
+                if row["profile_id"] is None:
+                    # Missing profile is a valid incomplete variant, never a
+                    # reason to invent an ID or reuse another configuration.
+                    row = copy.deepcopy(row)
+                    row["missing_fields"] = sorted(set(row["missing_fields"]) | {"profile_id"})
                 if row.get("status") not in ("possible", "rejected", "selected"):
                     fail("Неверный статус варианта", "INVALID_MODEL_OUTPUT")
                 for check_index, check in enumerate(row.get("requirement_checks", [])):
@@ -171,6 +176,10 @@ def readiness(task, scene, sources):
         return result
     result["conflict_ids"] = [r["id"] for r in task["conflicts"] if not r.get("resolved")]
     selected = [r for r in task["candidates"] if r.get("status") == "selected"]
+    considered = selected if len(selected) == 1 else [c for c in task["candidates"] if c.get("status") == "possible"]
+    missing_profile = any("profile_id" in c and c["profile_id"] is None for c in considered)
+    if missing_profile:
+        result["reasons"].append("Профиль для выбранных режима и материала пока не подтверждён. Выберите эти настройки в STE Slicer и повторите анализ.")
     used_assumptions = set(selected[0].get("assumption_ids", [a["id"] for a in task["assumptions"]])) if len(selected) == 1 else set()
     result["pending_assumption_ids"] = [r["id"] for r in task["assumptions"] if r["id"] in used_assumptions and r.get("acceptance") != "accepted"]
     result["blocking_unknown_ids"] = [r["id"] for r in task["unknowns"] if r.get("blocking") and not r.get("resolved")]
@@ -201,7 +210,7 @@ def readiness(task, scene, sources):
     if result["conflict_ids"] or result["failed_check_ids"]:
         result["status"] = "blocked"
         result["reasons"].append("Жёсткие требования или противоречия требуют проверки специалистом")
-    elif result["blocking_unknown_ids"] or result["pending_assumption_ids"]:
+    elif missing_profile or result["blocking_unknown_ids"] or result["pending_assumption_ids"]:
         result["status"] = "needs_input"
     elif not result["reasons"]:
         result["status"] = "ready_for_plan"

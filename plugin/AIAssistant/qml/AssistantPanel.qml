@@ -1,0 +1,387 @@
+import QtQuick 2.7
+import QtQuick.Controls 2.2
+import QtQuick.Layouts 1.3
+
+Rectangle {
+    id: root
+    objectName: "assistantPanel"
+    property var backend: null
+    property var v: backend ? backend.view : ({})
+    property var assessment: v.assessment || ({})
+    property string modal: ""
+    property var selectedChats: []
+    property bool details: false
+    property int settingsVersion: -1
+    property bool followTail: true
+    color: "#f1f7fb"
+    implicitWidth: 1000
+    implicitHeight: 720
+    function act(name) { if (backend) backend[name](); }
+    function fillSettings() {
+        var c = v.config || {};
+        baseUrl.text = c.base_url || ""; modelName.text = c.model || ""; secret.text = "";
+        pipeline.currentIndex = c.pipeline === "single" ? 1 : 0;
+        settingsVersion = v.configVersion;
+    }
+    function toggleChat(id, checked) {
+        var next = selectedChats.slice(0), at = next.indexOf(id);
+        if (checked && at < 0) next.push(id);
+        if (!checked && at >= 0) next.splice(at, 1);
+        selectedChats = next;
+    }
+    onVChanged: {
+        if (modal === "settings" && settingsVersion !== v.configVersion) fillSettings();
+        if (v.prompt && v.prompt.kind) { promptInput.text = ""; modal = "prompt"; }
+        tailTimer.restart();
+    }
+    Connections {
+        target: root.backend || null
+        onDraftChanged: if (root.backend) composer.text = root.backend.draft
+    }
+    Timer { id: tailTimer; interval: 20; onTriggered: if (root.followTail) conversation.contentY = Math.max(0, conversation.contentHeight - conversation.height); }
+    DropArea {
+        anchors.fill: parent
+        enabled: !root.v.analytics && !root.v.busy
+        onDropped: if (drop.hasUrls && root.backend) root.backend.uploadUrls(drop.urls)
+    }
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: 14
+        spacing: 12
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+            Image { source: "Robot.svg"; Layout.preferredWidth: 45; Layout.preferredHeight: 45 }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 3
+                Text { text: root.v.analytics ? "Аналитика подготовки" : "AI Print Assistant"; color: "#123858"; font.family: "Segoe UI"; font.pixelSize: 20; font.bold: true }
+                Text { Layout.fillWidth: true; text: root.v.title || "Опишите задачу — ассистент подберёт параметры печати"; color: "#7d8e9f"; font.pixelSize: 11; elide: Text.ElideRight }
+            }
+            AssistantButton { text: "Все чаты"; onClicked: { root.selectedChats = []; root.modal = "chats"; } }
+            AssistantButton { text: root.v.analytics ? "К чату" : "Аналитика"; onClicked: root.v.analytics ? root.act("chat") : root.backend.loadAnalytics(30) }
+            AssistantButton { text: "LLM"; implicitWidth: 55; onClicked: { root.modal = "settings"; root.fillSettings(); root.act("loadSettings"); } }
+            AssistantButton { visible: root.width < 850 && !root.v.analytics; text: root.details ? "Чат" : "Параметры"; onClicked: root.details = !root.details }
+        }
+        Rectangle {
+            visible: (root.v.notice || "") !== ""
+            Layout.fillWidth: true
+            implicitHeight: noticeText.implicitHeight + 20
+            color: "#fff3e4"; radius: 7
+            Text { id: noticeText; anchors.fill: parent; anchors.margins: 10; text: root.v.notice || ""; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: "#96532c"; font.pixelSize: 12 }
+        }
+        RowLayout {
+            visible: !root.v.analytics
+            Layout.fillWidth: true; Layout.fillHeight: true
+            spacing: 12
+            Rectangle {
+                visible: root.width >= 1000
+                Layout.preferredWidth: 94; Layout.fillHeight: true
+                color: "#fafcfe"; radius: 9
+                Column {
+                    anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 12
+                    spacing: 22
+                    Repeater {
+                        model: [{title:"Задача",note:"Описание и модель"}, {title:"Анализ",note:"Требования и проверки"}, {title:"План",note:"Параметры и согласие"}, {title:"Слайсинг",note:"Расчёт G-code"}, {title:"Файлы",note:"3MF и G-code"}]
+                        Column {
+                            width: parent.width; spacing: 6
+                            Rectangle { width: 27; height: 27; radius: 14; color: index <= (root.v.step || 0) ? "#008bd6" : "#d3dce5"; Text { anchors.centerIn: parent; text: index + 1; color:"white"; font.pixelSize: 12; font.bold:true } }
+                            Text { text:modelData.title; color:index === root.v.step ? "#087eb9" : "#40566d"; font.pixelSize:12; font.bold:true }
+                            Text { width:parent.width; text:modelData.note; wrapMode:Text.Wrap; color:"#8795a4"; font.pixelSize:10 }
+                        }
+                    }
+                }
+            }
+            ColumnLayout {
+                visible: root.width >= 850 || !root.details
+                Layout.fillWidth: true; Layout.fillHeight: true
+                spacing: 8
+                RowLayout {
+                    Layout.fillWidth:true
+                    Rectangle { width:7; height:7; radius:4; color:root.v.active ? "#f0b442" : "#40b987" }
+                    Text { Layout.fillWidth:true; text:root.v.status || "Подключение…"; color:"#748a9c"; font.pixelSize:11; elide:Text.ElideRight }
+                    Text { visible:root.v.state === "slicing"; text:root.backend && root.backend.sliceProgress >= 0 ? Math.round(root.backend.sliceProgress * 100) + "%" : "Проверка настроек…"; color:"#1683c7"; font.pixelSize:11 }
+                    AssistantButton { compact:true; text:root.assessment.score === undefined ? "Проверки…" : "Готовность " + root.assessment.score + "/100"; onClicked: { root.details=true; rightPane.contentY=assessmentCard.y; } }
+                    AssistantButton { compact:true; text:root.v.active ? "Остановить" : (root.v.calibrationFor || {}).session_id ? "Подготовить план куба" : "Повторить анализ"; enabled:!!root.v.sessionId && !root.v.busy; onClicked:root.v.active ? root.act("cancel") : root.act("analyze") }
+                }
+                ProgressBar { visible:root.v.state === "slicing"; Layout.fillWidth:true; indeterminate:!root.backend || root.backend.sliceProgress < 0; value:root.backend && root.backend.sliceProgress >= 0 ? root.backend.sliceProgress : 0 }
+                Flickable {
+                    id:conversation
+                    objectName:"conversation"
+                    Layout.fillWidth:true; Layout.fillHeight:true
+                    contentWidth:width; contentHeight:messagesColumn.height
+                    clip:true
+                    boundsBehavior:Flickable.StopAtBounds
+                    onMovementEnded:root.followTail = contentY + height >= contentHeight - 80
+                    ScrollBar.vertical:ScrollBar {}
+                    Column {
+                        id:messagesColumn; width:conversation.width - 6; spacing:12
+                        AssistantCard {
+                            visible:!(root.v.messages || []).length
+                            width:parent.width; title:"Начните с детали и её задачи"
+                            Text { Layout.fillWidth:true; text:"Прикрепите модель и опишите назначение. Здесь появятся анализ, вопросы и план печати."; color:"#75899c"; font.pixelSize:13; wrapMode:Text.Wrap }
+                        }
+                        Repeater {
+                            model:root.v.messages || []
+                            Item {
+                                width:messagesColumn.width
+                                height:bubble.height
+                                Rectangle {
+                                    id:bubble
+                                    width:modelData.role === "user" ? parent.width * .87 : parent.width
+                                    anchors.right:parent.right
+                                    color:modelData.role === "user" ? "#dff0ff" : modelData.role === "system" ? "#eef3f7" : "white"
+                                    radius:9
+                                    height:bubbleContent.height + 24
+                                    Column {
+                                        id:bubbleContent; anchors.left:parent.left; anchors.right:parent.right; anchors.top:parent.top; anchors.margins:12; spacing:8
+                                        function fitWidths() { for(var i=0;i<children.length;++i) children[i].width=width; }
+                                        onWidthChanged:fitWidths()
+                                        onChildrenChanged:fitWidths()
+                                        Component.onCompleted:fitWidths()
+                                        Text { text:modelData.role === "user" ? "Вы" : modelData.role === "assistant" ? "AI Assistant" : "Система"; color:"#587e9f"; font.pixelSize:10; font.bold:true }
+                                        Text { Layout.fillWidth:true; text:modelData.text || ""; textFormat:Text.PlainText; wrapMode:Text.Wrap; color:"#2f4a62"; font.pixelSize:12; lineHeight:1.25 }
+                                        Repeater {
+                                            model:modelData.files || []
+                                            ColumnLayout {
+                                                Layout.fillWidth:true; spacing:4
+                                                Text { Layout.fillWidth:true; text:modelData.name; textFormat:Text.PlainText; elide:Text.ElideRight; color:"#167db4"; font.pixelSize:12 }
+                                                RowLayout {
+                                                    AssistantButton { compact:true; text:modelData.kind === "image" ? "Посмотреть" : modelData.status === "imported" ? "В сцене" : "Загрузить в сцену"; enabled:modelData.kind === "image" || ["saved","error","interrupted"].indexOf(modelData.status) >= 0; onClicked: modelData.kind === "image" ? root.backend.preview(modelData.id) : root.backend.importFile(modelData.id) }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        TextEdit {
+                            id:workflow
+                            objectName:"workflow"
+                            width:parent.width
+                            height:contentHeight
+                            text:root.v.workflow || ""
+                            textFormat:TextEdit.RichText; readOnly:true; selectByMouse:true; wrapMode:TextEdit.Wrap
+                            color:"#2d4862"; font.family:"Segoe UI"; font.pixelSize:12
+                            onLinkActivated:root.backend.invokeLink(link)
+                        }
+                    }
+                }
+                Rectangle {
+                    Layout.fillWidth:true
+                    implicitHeight:composerLayout.implicitHeight + 18
+                    color:"white"; radius:9; border.color:"#9ccdea"
+                    ColumnLayout {
+                        id:composerLayout; anchors.left:parent.left; anchors.right:parent.right; anchors.top:parent.top; anchors.margins:9; spacing:6
+                        Repeater {
+                            model:root.v.pending || []
+                            RowLayout {
+                                Layout.fillWidth:true
+                                Text { Layout.fillWidth:true; text:modelData.name; textFormat:Text.PlainText; color:"#2585b5"; elide:Text.ElideRight; font.pixelSize:11 }
+                                AssistantButton { compact:true; text:"Убрать"; enabled:!root.v.busy; onClicked:root.backend.removeFile(modelData.id) }
+                            }
+                        }
+                        TextArea {
+                            id:composer; objectName:"composer"
+                            Layout.fillWidth:true; Layout.preferredHeight:70
+                            placeholderText:"Напишите сообщение для AI ассистента…"
+                            wrapMode:TextEdit.Wrap; selectByMouse:true
+                            enabled:!!root.v.sessionId && !root.v.busy
+                            font.family:"Segoe UI"; font.pixelSize:12; color:"#294864"
+                            background:Rectangle { color:"transparent" }
+                            onTextChanged:if(root.backend && text !== root.backend.draft) root.backend.setDraft(text)
+                            Keys.onReturnPressed: { if(event.modifiers & Qt.ControlModifier) { root.act("send"); event.accepted = true; } else event.accepted = false; }
+                        }
+                        RowLayout {
+                            Layout.fillWidth:true
+                            AssistantButton { text:"Прикрепить"; compact:true; enabled:!root.v.busy; onClicked:root.act("attachFiles") }
+                            Text { Layout.fillWidth:true; text:"STL / OBJ / 3MF · Изображения"; color:"#9aabb8"; font.pixelSize:10; elide:Text.ElideRight }
+                            AssistantButton { text:"Отправить ↑"; primary:true; compact:true; enabled:!!root.v.sessionId && !root.v.busy; onClicked:root.act("send") }
+                        }
+                    }
+                }
+            }
+            Flickable {
+                id:rightPane
+                visible:root.width >= 850 || root.details
+                Layout.preferredWidth:285
+                Layout.fillWidth:root.width < 850
+                Layout.fillHeight:true
+                clip:true
+                contentWidth:width
+                contentHeight:rightColumn.height
+                boundsBehavior:Flickable.StopAtBounds
+                ScrollBar.vertical:ScrollBar {}
+                Column {
+                    id:rightColumn
+                    width:rightPane.width - 8; spacing:12
+                    AssistantCard {
+                        width:parent.width; title:"Действия ассистента"
+                        Repeater {
+                            model:root.v.tools || []
+                            RowLayout {
+                                Layout.fillWidth:true
+                                Text { text:modelData.status === "tool_finished" ? "✓" : modelData.status === "tool_failed" ? "!" : "•"; color:modelData.status === "tool_failed" ? "#d47846" : "#15b97a"; font.bold:true; font.pixelSize:15 }
+                                Text { Layout.fillWidth:true; text:modelData.name; wrapMode:Text.Wrap; color:"#536a7d"; font.pixelSize:11 }
+                                Text { text:modelData.duration; color:"#91a3b2"; font.pixelSize:10 }
+                            }
+                        }
+                        AssistantButton { Layout.fillWidth:true; text:"Новая задача"; onClicked:root.act("newChat") }
+                    }
+                    AssistantCard {
+                        width:parent.width; title:"Предлагаемые параметры печати"
+                        Text { visible:!(root.v.params || []).length; Layout.fillWidth:true; text:"Параметры появятся после анализа и проверки плана."; wrapMode:Text.Wrap; color:"#8b9dab"; font.pixelSize:11 }
+                        Repeater {
+                            model:root.v.params || []
+                            RowLayout {
+                                Layout.fillWidth:true
+                                Text { Layout.preferredWidth:75; text:modelData.name; color:"#536a7d"; font.pixelSize:11; wrapMode:Text.Wrap }
+                                Rectangle {
+                                    Layout.fillWidth:true; implicitHeight:32; color:"#f9fcfe"; radius:5; border.color:"#d3e1ea"
+                                    Text { anchors.fill:parent; anchors.margins:7; text:modelData.value || "—"; textFormat:Text.PlainText; elide:Text.ElideRight; color:"#36556e"; font.pixelSize:11; verticalAlignment:Text.AlignVCenter }
+                                }
+                            }
+                        }
+                        Text { Layout.fillWidth:true; text:"Изменения параметров задавайте в чате. Применение — после согласования плана."; color:"#8b9dab"; wrapMode:Text.Wrap; font.pixelSize:10 }
+                        AssistantButton { Layout.fillWidth:true; text:"✓  Применить и рассчитать"; primary:true; enabled:!!root.v.planId && !root.v.busy; onClicked:root.act("applyPlan") }
+                    }
+                    AssistantCard {
+                        id:assessmentCard
+                        width:parent.width; title:"Готовность к проверочной печати"
+                        RowLayout {
+                            Layout.fillWidth:true
+                            Text { text:root.assessment.score === undefined ? "—" : root.assessment.score + " / 100"; font.pixelSize:25; font.bold:true; color:(root.assessment.score || 0) >= (root.assessment.threshold || 80) && !(root.assessment.failed_checks || []).length ? "#13a974" : "#b17a2c" }
+                            Item { Layout.fillWidth:true }
+                            Text { text:"Порог"; color:"#899cac"; font.pixelSize:10 }
+                            SpinBox { Layout.preferredWidth:88; from:1; to:100; value:root.assessment.threshold || 80; editable:true; font.pixelSize:11; onValueModified:root.backend.setThreshold(value) }
+                        }
+                        Repeater {
+                            model:root.assessment.components || []
+                            ColumnLayout {
+                                Layout.fillWidth:true; spacing:4
+                                RowLayout { Layout.fillWidth:true; Text { Layout.fillWidth:true; text:modelData.title; color:"#536d82"; font.pixelSize:11 } Text { text:modelData.score + "/" + modelData.maximum; color:"#6f8ba1"; font.pixelSize:10 } }
+                                Rectangle { Layout.fillWidth:true; height:4; radius:2; color:"#e7eef4"; Rectangle { width:parent.width * modelData.score / modelData.maximum; height:parent.height; color:"#36a2dc"; radius:2 } }
+                                Text { Layout.fillWidth:true; text:modelData.reason; color:"#99a8b3"; wrapMode:Text.Wrap; font.pixelSize:10 }
+                            }
+                        }
+                        Text { Layout.fillWidth:true; text:root.assessment.meaning || "Собираем факты для оценки…"; wrapMode:Text.Wrap; color:"#8b9dab"; font.pixelSize:10 }
+                        Text { visible:(root.assessment.failed_checks || []).length > 0; width:parent.width; text:"Куб не прошёл часть проверок. Высокая сумма баллов не отменяет выявленные дефекты."; color:"#af6235"; wrapMode:Text.Wrap; font.pixelSize:11 }
+                        Repeater {
+                            model:root.assessment.questions || []
+                            AssistantButton { Layout.fillWidth:true; text:modelData.label || ({load:"Уточнить нагрузку",temperature:"Уточнить температуру",environment:"Уточнить среду"})[modelData.field]; compact:true; onClicked: { root.modal = "assessment"; assessmentField.text = modelData.field; assessmentQuestion.text = modelData.text; assessmentValue.text = ""; } }
+                        }
+                        AssistantButton { visible:root.assessment.recommend_calibration === true; Layout.fillWidth:true; text:"Подготовить куб 20 мм"; primary:true; enabled:!!root.assessment.process_signature; onClicked:root.modal = "calibration" }
+                        AssistantButton { visible:!!(root.v.calibrationFor || {}).session_id; Layout.fillWidth:true; text:"Ввести измерения куба"; onClicked:root.modal = "measurements" }
+                        AssistantButton { visible:!!(root.v.calibrationFor || {}).session_id; Layout.fillWidth:true; text:"Вернуться к детали"; compact:true; onClicked:root.backend.select(root.v.calibrationFor.session_id) }
+                    }
+                }
+            }
+        }
+        ColumnLayout {
+            visible:!!root.v.analytics
+            Layout.fillWidth:true; Layout.fillHeight:true; spacing:10
+            RowLayout {
+                Layout.fillWidth:true
+                ComboBox { id:reportDays; model:["7 дней","30 дней","Всё время"]; currentIndex:1; onActivated:root.backend.loadAnalytics([7,30,0][currentIndex]) }
+                TextField { Layout.fillWidth:true; placeholderText:"Найти задачу…"; onTextChanged:if(root.backend) root.backend.searchAnalytics(text) }
+                ComboBox { model:["Все задачи","Нужны действия","Актуальный G-code","Есть файлы"]; onActivated:root.backend.filterAnalytics(["all","attention","ready","saved"][currentIndex]) }
+                AssistantButton { text:"Обновить"; onClicked:root.backend.loadAnalytics([7,30,0][reportDays.currentIndex]) }
+                AssistantButton { text:"Сохранить CSV"; onClicked:root.act("exportCsv") }
+            }
+            Flickable {
+                id:analyticsScroll
+                Layout.fillWidth:true; Layout.fillHeight:true; clip:true
+                contentWidth:width; contentHeight:analyticsDoc.contentHeight
+                boundsBehavior:Flickable.StopAtBounds
+                ScrollBar.vertical:ScrollBar {}
+                TextEdit { id:analyticsDoc; width:analyticsScroll.width - 12; height:contentHeight; text:root.v.report || "Загружаем аналитику…"; readOnly:true; selectByMouse:true; textFormat:TextEdit.RichText; wrapMode:TextEdit.Wrap; onLinkActivated:root.backend.invokeReportLink(link) }
+            }
+        }
+    }
+    // Forms stay inside the stage; they never replace the application's main window.
+    Rectangle {
+        visible:root.modal !== ""
+        anchors.fill:parent; color:"#661c3e56"; z:100
+        MouseArea { anchors.fill:parent; acceptedButtons:Qt.AllButtons; onWheel:wheel.accepted = true }
+        Rectangle {
+            anchors.centerIn:parent; width:Math.min(600,root.width-32); height:Math.min(forms.height+40,root.height-28); color:"#f8fcff"; radius:12; border.color:"#d4e5f0"
+            Flickable {
+                id:formScroll
+                anchors.fill:parent; anchors.margins:20; clip:true
+                contentWidth:width; contentHeight:forms.height
+                boundsBehavior:Flickable.StopAtBounds
+                ScrollBar.vertical:ScrollBar {}
+                Column {
+                    id:forms; width:formScroll.width-10; spacing:12
+                    function fitWidths() { for(var i=0;i<children.length;++i) children[i].width=width; }
+                    onWidthChanged:fitWidths()
+                    onChildrenChanged:fitWidths()
+                    Component.onCompleted:fitWidths()
+                    RowLayout { Layout.fillWidth:true; Text { Layout.fillWidth:true; text:({chats:"Все чаты",settings:"Подключение LLM",prompt:(root.v.prompt || {}).title,assessment:"Условия эксплуатации",calibration:"Калибровочный куб",measurements:"Измерения после ручной печати"})[root.modal] || ""; wrapMode:Text.Wrap; color:"#1b4566"; font.pixelSize:18; font.bold:true } AssistantButton { text:"Закрыть"; compact:true; onClicked: { root.modal=""; secret.text=""; root.act("dismissPrompt"); } } }
+                    ColumnLayout {
+                        visible:root.modal === "chats"; Layout.fillWidth:true; spacing:8
+                        RowLayout { AssistantButton { text:"Новый чат"; primary:true; onClicked: { root.modal=""; root.act("newChat"); } } Text { text:"Выберите несколько для объединения"; color:"#879dac"; font.pixelSize:11 } }
+                        Repeater {
+                            model:root.v.sessions || []
+                            RowLayout {
+                                Layout.fillWidth:true
+                                CheckBox { checked:root.selectedChats.indexOf(modelData.id) >= 0; onToggled:root.toggleChat(modelData.id,checked) }
+                                AssistantButton { Layout.fillWidth:true; text:modelData.title; onClicked: { root.modal=""; root.backend.select(modelData.id); } }
+                            }
+                        }
+                        TextField { id:mergeTitle; Layout.fillWidth:true; text:"Объединённая задача"; placeholderText:"Название общего чата" }
+                        Text { Layout.fillWidth:true; text:"Создастся новый чат с копией переписки и вложений. Исходные чаты сохранятся. Старые планы и согласия не переносятся."; wrapMode:Text.Wrap; color:"#879dac"; font.pixelSize:11 }
+                        AssistantButton { text:"Объединить выбранные (" + root.selectedChats.length + ")"; enabled:root.selectedChats.length >= 2; primary:true; onClicked: { root.backend.mergeChats(root.selectedChats,mergeTitle.text); root.modal=""; } }
+                        TextField { id:renameTitle; Layout.fillWidth:true; placeholderText:"Новое название текущего чата" }
+                        AssistantButton { text:"Переименовать текущий чат"; enabled:renameTitle.text.length>0; onClicked: { root.backend.rename(renameTitle.text); root.modal=""; } }
+                    }
+                    ColumnLayout {
+                        visible:root.modal === "settings"; Layout.fillWidth:true
+                        Text { text:"Base URL"; color:"#658198" }
+                        TextField { id:baseUrl; Layout.fillWidth:true; placeholderText:"https://…/v1" }
+                        Text { text:"Модель"; color:"#658198" }
+                        TextField { id:modelName; Layout.fillWidth:true }
+                        ComboBox { id:pipeline; Layout.fillWidth:true; model:["Пошаговый анализ","Полная карта одним запросом"] }
+                        TextField { id:secret; Layout.fillWidth:true; placeholderText:"Новый API key — или оставьте пустым"; echoMode:TextInput.Password }
+                        Text { Layout.fillWidth:true; text:(root.v.config || {}).key_configured ? "Ключ сохранён в STE Slicer" : "Ключ ещё не задан"; color:(root.v.config || {}).key_configured ? "#1aa274" : "#b17a2c" }
+                        Text { Layout.fillWidth:true; text:"После сохранения поле очищается. Пустое поле сохраняет прежний ключ."; wrapMode:Text.Wrap; color:"#879dac"; font.pixelSize:11 }
+                        RowLayout {
+                            AssistantButton { text:"Сохранить"; primary:true; onClicked:root.backend.saveSettings(baseUrl.text,modelName.text,secret.text,pipeline.currentIndex === 0 ? "stepwise" : "single",false) }
+                            AssistantButton { text:"Сохранить и проверить"; onClicked:root.backend.saveSettings(baseUrl.text,modelName.text,secret.text,pipeline.currentIndex === 0 ? "stepwise" : "single",true) }
+                            AssistantButton { text:"Удалить ключ"; onClicked:root.act("clearKey") }
+                        }
+                    }
+                    ColumnLayout {
+                        visible:root.modal === "prompt"; Layout.fillWidth:true
+                        TextArea { id:promptInput; Layout.fillWidth:true; Layout.preferredHeight:100; placeholderText:"Ваш ответ и основание"; wrapMode:TextEdit.Wrap; visible:(root.v.prompt || {}).kind !== "export" }
+                        CheckBox { id:overwrite; visible:(root.v.prompt || {}).kind === "export"; text:"Разрешаю замену существующих project.3mf и result.gcode" }
+                        AssistantButton { text:(root.v.prompt || {}).kind === "export" ? "Выбрать папку и сохранить" : "Ответить"; primary:true; onClicked: { if((root.v.prompt || {}).kind === "export") root.backend.exportResult(overwrite.checked); else root.backend.submitPrompt(promptInput.text); root.modal=""; } }
+                    }
+                    ColumnLayout {
+                        visible:root.modal === "assessment"; Layout.fillWidth:true
+                        Text { id:assessmentField; visible:false }
+                        Text { id:assessmentQuestion; Layout.fillWidth:true; wrapMode:Text.Wrap; color:"#54748d" }
+                        TextField { id:assessmentValue; Layout.fillWidth:true; placeholderText:"Ответ, единицы или «не применяется»" }
+                        AssistantButton { text:"Сохранить ответ"; primary:true; onClicked: { root.backend.answerAssessment(assessmentField.text,assessmentValue.text); root.modal=""; } }
+                    }
+                    ColumnLayout {
+                        visible:root.modal === "calibration"; Layout.fillWidth:true
+                        Text { Layout.fillWidth:true; text:"Будет создан отдельный чат со встроенным кубом 20×20×20 мм. Сохраните основной проект и очистите сцену в Prepare перед загрузкой куба. Материал и настройки должны соответствовать будущей детали. Печать выполняется вручную."; wrapMode:Text.Wrap; color:"#54748d" }
+                        Text { Layout.fillWidth:true; text:"Куб проверяет размеры, адгезию и видимые дефекты. Он не подтверждает прочность детали и правильность G-code для другой геометрии."; wrapMode:Text.Wrap; color:"#9b7549" }
+                        AssistantButton { text:"Создать задачу с кубом"; primary:true; onClicked: { root.modal=""; root.act("createCalibration"); } }
+                    }
+                    ColumnLayout {
+                        visible:root.modal === "measurements"; Layout.fillWidth:true
+                        Text { Layout.fillWidth:true; text:"Измерьте куб штангенциркулем. Номинал каждой оси — 20 мм; текущий допуск оценки ±0,2 мм. Z — высота; отметьте направления X/Y до снятия со стола. Результат относится к настройкам, с которыми подготовлен куб."; wrapMode:Text.Wrap; color:"#54748d" }
+                        RowLayout { TextField { id:mx; Layout.fillWidth:true; placeholderText:"X, мм" } TextField { id:my; Layout.fillWidth:true; placeholderText:"Y, мм" } TextField { id:mz; Layout.fillWidth:true; placeholderText:"Z, мм" } }
+                        CheckBox { id:adhesion; text:"Нет отрыва и заметного коробления" }
+                        CheckBox { id:layers; text:"Нет пропусков и расслоения" }
+                        CheckBox { id:surface; text:"Поверхность без заметных дефектов" }
+                        CheckBox { id:printed; text:"Куб действительно напечатан; это мои измерения" }
+                        AssistantButton { text:"Сохранить измерения"; primary:true; enabled:printed.checked; onClicked: { root.backend.saveCalibration(mx.text,my.text,mz.text,adhesion.checked,layers.checked,surface.checked,printed.checked); root.modal=""; } }
+                    }
+                }
+            }
+        }
+    }
+}

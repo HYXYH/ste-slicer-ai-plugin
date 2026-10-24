@@ -40,6 +40,8 @@ class LocalServer(ThreadingMixIn, HTTPServer):
         self.settings = Settings(bridge)
         from .analytics import Analytics
         self.analytics = Analytics(store)
+        from .workspace import Workspace
+        self.workspace = Workspace(store, bridge)
         self.tools = Tools(store, bridge)
         self.mcp = MCP(self.tools)
         self.plans = Plans(self)
@@ -190,7 +192,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(status, result)
         except ApiError as error:
             self._send(error.status, {"error": str(error), "code": error.code, "details": error.details})
-        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
             return
         except Exception:
             log.exception("AI Assistant HTTP request failed")
@@ -237,7 +239,7 @@ class Handler(BaseHTTPRequestHandler):
                     log.exception("Cannot enqueue model import")
                     for operation in operations:
                         store.finish(sid, operation["id"], "error", "Не удалось запустить импорт. Повторите отправку файла.")
-            if self.server.settings.public()["key_configured"] and "run_id" not in result:
+            if self.server.settings.public()["key_configured"] and "run_id" not in result and not store.internal(sid).get("calibration_for"):
                 run = self.server.runner.start(sid, "message-" + body["request_id"])
                 result.update(run)
                 store.edit(sid, lambda s: s["requests"][body["request_id"]]["result"].update(run))
@@ -276,6 +278,11 @@ class Handler(BaseHTTPRequestHandler):
         from .agent.contracts import validate, obj, ID
         from .session import uid
         server, store = self.server, self.server.store
+        if path == "/api/sessions/merge" and method == "POST":
+            from .agent.contracts import array, TEXT
+            body = self._json()
+            validate(body, obj({"session_ids": array(ID, 10, 2), "title": TEXT, "request_id": ID}, ["session_ids", "title", "request_id"]))
+            return server.workspace.merge(body["session_ids"], body["title"], body["request_id"]), 201
         if path in ("/api/analytics", "/api/analytics/export") and method == "GET":
             query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
             if set(query) - {"days"} or len(query.get("days", ["30"])) != 1:
@@ -307,9 +314,43 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) < 4 or parts[:2] != ["api", "sessions"]:
             return None
         sid, action = parts[2:4]
-        if action not in ("events", "runs", "answers", "plans", "export-target", "exports"):
+        if action == "workspace" and len(parts) == 4:
+            if method == "GET":
+                return store.get(sid, compact=True), 200
+            if method == "POST":
+                validate(self._json(), obj())
+                return store.select(sid, compact=True), 200
+            if method == "PATCH":
+                from .agent.contracts import TEXT
+                body = self._json()
+                validate(body, obj({"title": TEXT}, ["title"]))
+                return store.rename(sid, body["title"], compact=True), 200
+        if action == "events" and len(parts) == 5 and method == "GET":
+            validate(parts[4], ID)
+            return store.event_detail(sid, parts[4]), 200
+        if action not in ("events", "runs", "answers", "plans", "export-target", "exports", "assessment", "calibration"):
             return None
         store.get(sid)
+        if action == "assessment" and len(parts) == 4:
+            if method == "GET":
+                return server.workspace.assessment(sid), 200
+            if method == "PATCH":
+                from .agent.contracts import TEXT
+                from .workspace import FIELDS, OBSERVATIONS
+                body = self._json()
+                validate(body, obj({"answers": obj({k: TEXT for k in list(FIELDS) + list(OBSERVATIONS)}),
+                                    "threshold": {"type": "integer", "minimum": 1, "maximum": 100}}, []))
+                return server.workspace.save_answers(sid, body.get("answers", {}), body.get("threshold")), 200
+        if action == "calibration" and method == "POST":
+            body = self._json()
+            if len(parts) == 4:
+                validate(body, obj({"request_id": ID}, ["request_id"]))
+                return server.workspace.create_calibration(sid, body["request_id"]), 201
+            if len(parts) == 5 and parts[4] == "result":
+                return server.workspace.record_calibration(sid, body), 201
+            if len(parts) == 5 and parts[4] == "plan":
+                validate(body, obj({"request_id": ID}, ["request_id"]))
+                return server.workspace.cube_plan(sid, server.plans, body["request_id"]), 201
         if action == "events" and len(parts) == 4 and method == "GET":
             try:
                 after = int(parse_qs(urlsplit(self.path).query).get("after", ["0"])[0])

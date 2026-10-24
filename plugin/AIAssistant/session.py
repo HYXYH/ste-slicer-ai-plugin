@@ -24,6 +24,21 @@ class ApiError(Exception):
         self.details = details or {}
 
 
+def workspace_view(session):
+    """A display projection; complete source evidence remains in the normal API and history."""
+    result = {key: session[key] for key in ("id", "title", "revision", "updated_at", "workflow_state", "task", "plans", "operations", "exports", "calibration_for", "calibration_results", "calibration_process") if key in session}
+    result["files"] = {fid: {key: value for key, value in row.items() if key != "path"} for fid, row in session["files"].items()}
+    result["messages"] = [{key: row[key] for key in ("id", "role", "text", "created_at", "file_ids", "run_id", "origin") if key in row} for row in session["messages"]]
+    result["runs"] = {rid: {key: row[key] for key in ("id", "status", "created_at", "finished_at", "error") if key in row} for rid, row in session["runs"].items()}
+    task = {key: value for key, value in session["task_map"].items() if key != "resources"}
+    task["facts"] = [dict(fact, value={"objects": [{key: row[key] for key in ("id", "name", "dimensions_mm", "printable", "file_refs") if key in row} for row in fact["value"].get("objects", [])]})
+                     if fact.get("key") == "scene" else fact for fact in task.get("facts", [])]
+    result["task_map"] = task
+    result["events"] = [dict({key: row[key] for key in ("id", "seq", "session_id", "run_id", "created_at", "type", "operation_id", "tool", "code", "message", "phase", "request_number", "duration_ms") if key in row},
+                             has_details=bool(row.get("arguments") or row.get("result"))) for row in session["events"]]
+    return copy.deepcopy(result)
+
+
 class SessionStore:
     def __init__(self, root):
         self.root = root
@@ -53,6 +68,7 @@ class SessionStore:
             for plan in session["plans"].values():
                 plan["status"] = "stale"
             session["task_map"]["snapshot_ref"] = None
+            session["task_map"]["target_object_ids"] = []
             session["task_map"]["readiness"] = {"status": "stale", "reasons": ["Приложение перезапущено"]}
             if session["plans"]:
                 session["workflow_state"] = "stale"
@@ -120,29 +136,52 @@ class SessionStore:
             return {"sessions": sorted(rows, key=lambda s: s["updated_at"], reverse=True),
                     "active_session_id": self.data["active_session_id"]}
 
-    def select(self, session_id):
+    def select(self, session_id, compact=False):
         with self.lock:
             self._session(session_id)
             self.data["active_session_id"] = session_id
             self._save()
-            return self.get(session_id)
+            return self.get(session_id, compact=compact)
 
-    def rename(self, session_id, title):
+    def rename(self, session_id, title, compact=False):
         with self.lock:
             s = self._session(session_id)
             s["title"] = self._title(title)
             self._touch(s)
-            return self.get(session_id)
+            return self.get(session_id, compact=compact)
 
-    def get(self, session_id):
+    def get(self, session_id, compact=False):
         with self.lock:
-            result = copy.deepcopy(self._session(session_id))
+            original = self._session(session_id)
+            if compact:
+                return workspace_view(original)
+            result = copy.deepcopy(original)
             result.pop("requests")
             result.pop("workflow_requests", None)
             result.pop("action_results", None)
             for attachment in result["files"].values():
                 attachment.pop("path", None)
             return result
+
+    def progress(self, session_id, operation_id, amount):
+        """Progress is transient. The terminal operation persists it with the result."""
+        with self.lock:
+            operation = self._session(session_id)["operations"].get(operation_id)
+            if operation and operation["status"] == "slicing":
+                operation["progress"] = amount
+
+    def attachments_for_object(self, object_id):
+        with self.lock:
+            return [{"session_id": session["id"], "file_id": attachment["id"]}
+                    for session in self.data["sessions"].values() for attachment in session["files"].values()
+                    if object_id in attachment.get("object_ids", [])]
+
+    def event_detail(self, session_id, event_id):
+        with self.lock:
+            event = next((row for row in self._session(session_id)["events"] if row["id"] == event_id), None)
+            if event is None:
+                raise ApiError("Действие не найдено", 404)
+            return copy.deepcopy(event)
 
     def add_file(self, session_id, attachment):
         with self.lock:
@@ -279,6 +318,11 @@ class SessionStore:
             attachment = s["files"][op["file_id"]]
             attachment.update(status=status, error=error)
             if object_ids is not None:
+                previous = set(attachment.get("object_ids", []))
+                targets = set(s["task_map"]["target_object_ids"])
+                if previous & targets:
+                    # Reloading the same attachment replaces its obsolete scene IDs.
+                    s["task_map"]["target_object_ids"] = sorted((targets - previous) | set(object_ids))
                 attachment.update(object_ids=object_ids, scene_present=bool(object_ids), run_id=self.run_id)
             if status in ("imported", "error"):
                 message = ("Модель «{}» добавлена в сцену.".format(attachment["name"])

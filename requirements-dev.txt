@@ -1,0 +1,4 @@
+-r requirements.txt
+# Optional headless verification of the native window in the project .venv.
+# The installed plugin uses STE Slicer's bundled PyQt5 / Qt 5.10, not this wheel.
+PyQt5==5.15.11; python_version >= '3.8'

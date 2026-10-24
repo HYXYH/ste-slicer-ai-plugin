@@ -35,6 +35,8 @@ class Plans:
             fail("В сцене есть другие модели. Включите их в задачу или явно согласуйте удаление.", "FOREIGN_OBJECTS", 409)
         configuration = scene["configuration"]
         choice = plan["selected"]
+        if not isinstance(choice.get("profile_id"), str) or not choice["profile_id"]:
+            fail("Сначала подтвердите профиль выбранных режима и материала", "NO_COMPATIBLE_PROFILE", 409)
         extruder = next((e for e in configuration["extruders"] if e["id"] == choice["extruder_id"]), None)
         if extruder is None:
             fail("Выбранный экструдер отсутствует", "OBJECT_NOT_FOUND", 409)

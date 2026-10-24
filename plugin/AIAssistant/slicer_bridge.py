@@ -6,7 +6,7 @@ import threading
 import time
 from collections import deque
 
-from .session import now
+from .session import now, ApiError
 
 log = logging.getLogger(__name__)
 MODE_NAMES = {"classic": "3D", "cylindrical": "5D Spiral", "cylindrical_full": "5D"}
@@ -45,6 +45,7 @@ def read_context(app):
                             brand=extruder.material.getMetaDataEntry("brand", ""))
         result["extruders"].append({
             "id": extruder.getId(), "position": str(extruder.getMetaDataEntry("position", "0")),
+            "enabled": bool(extruder.isEnabled) if hasattr(extruder, "isEnabled") else None,
             "active": manager.activeStack == extruder, "material": material})
         result["profile"]["has_user_changes"] = (
             result["profile"]["has_user_changes"] or bool(extruder.userChanges.getAllKeys()))
@@ -64,6 +65,11 @@ class SlicerBridge:
         self.active = None
         self.closed = False
         self.ticks = 0
+        from .slicer_api import SlicerAPI
+        self.commands = deque()
+        self.callbacks = deque()
+        self.qt_thread = threading.current_thread().ident
+        self.api = SlicerAPI(self)
         self.timer = QTimer()
         self.timer.setInterval(250)
         self.timer.timeout.connect(self._tick)
@@ -81,6 +87,50 @@ class SlicerBridge:
             self.queue.extend(operations)
         # QTimer drains the queue on the main Qt thread.
 
+    def call(self, name, arguments, expected_ref=None):
+        if threading.current_thread().ident == self.qt_thread:
+            return self.api.dispatch(name, arguments, expected_ref)
+        command = {"name": name, "arguments": copy.deepcopy(arguments), "expected": expected_ref,
+                   "done": threading.Event(), "abandoned": False}
+        with self.lock:
+            if self.closed:
+                raise ApiError("Слайсер закрывается", 409, "INTERRUPTED")
+            self.commands.append(command)
+        if not command["done"].wait(300 if name == "choose_export_target" else 30):
+            with self.lock:
+                command["abandoned"] = True
+            raise ApiError("Слайсер не подтвердил операцию. Проверьте фактическую сцену.", 504, "TOOL_TIMEOUT")
+        if "error" in command:
+            raise command["error"]
+        return command["result"]
+
+    def post(self, callback):
+        with self.lock:
+            self.callbacks.append(callback)
+
+    def _commands(self):
+        with self.lock:
+            callbacks = list(self.callbacks)
+            self.callbacks.clear()
+            command = self.commands.popleft() if self.commands else None
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                log.exception("Assistant backend callback failed")
+        if command:
+            try:
+                if command["abandoned"]:
+                    return
+                command["result"] = self.api.dispatch(command["name"], command["arguments"], command["expected"])
+            except ApiError as error:
+                command["error"] = error
+            except Exception:
+                log.exception("Assistant Qt command failed")
+                command["error"] = ApiError("Ошибка API STE Slicer. Проверьте журнал приложения.", 409, "SLICER_API_ERROR")
+            finally:
+                command["done"].set()
+
     def _nodes(self):
         from UM.Scene.Iterator.DepthFirstIterator import DepthFirstIterator
         root = self.app.getController().getScene().getRoot()
@@ -97,12 +147,15 @@ class SlicerBridge:
             self.context = context
         try:
             self.store.reconcile_scene(set(str(id(n)) for n in self._nodes()))
+            if self.app.getGlobalContainerStack() is not None:
+                self.store.invalidate_snapshot(self.api.get_scene_snapshot()["snapshot_ref"])
         except Exception:
             log.exception("Cannot reconcile scene")
 
     def _tick(self):
         if self.closed:
             return
+        self._commands()
         try:
             self.ticks += 1
             if self.ticks % 8 == 0:
@@ -158,6 +211,10 @@ class SlicerBridge:
     def close(self):
         with self.lock:
             self.closed = True
+            for command in self.commands:
+                command["error"] = ApiError("Приложение закрыто", 409, "INTERRUPTED")
+                command["done"].set()
+            self.commands.clear()
         self.timer.stop()
 
 
@@ -173,6 +230,21 @@ class DemoBridge:
 
     def __init__(self, store):
         self.store = store
+        self.preferences_path = os.path.join(store.root, "demo-preferences.json")
+
+    def call(self, name, arguments, expected_ref=None):
+        if name == "preferences":
+            import json
+            config = {"base_url": "", "api_key": "", "model": ""}
+            if os.path.exists(self.preferences_path):
+                with open(self.preferences_path, encoding="utf-8") as source:
+                    config.update(json.load(source))
+            if arguments.get("values") is not None:
+                config.update(arguments["values"])
+                with open(self.preferences_path, "w", encoding="utf-8") as target:
+                    json.dump(config, target)
+            return config
+        raise ApiError("Для этого действия откройте плагин в STE Slicer", 409, "NO_PRINTER")
 
     def close(self):
         pass

@@ -1,0 +1,10 @@
+{
+  "id": "expert_rule_id", "version": 1, "title": "Название правила",
+  "status": "draft", "source": {"document": "Укажите документ и раздел"},
+  "reviewed_by": null, "reviewed_at": null,
+  "applies_when": [{"field": "material_type", "op": "eq", "value": "Укажите материал"}],
+  "excluded_when": [], "required_facts": ["load_direction"],
+  "affected_decisions": ["orientation"], "recommendations": {}, "limits": {},
+  "question_templates": [], "calibration_hint": null,
+  "notes": "Шаблон не участвует в поиске. Не заполняйте значения без источника."
+}

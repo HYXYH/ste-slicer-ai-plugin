@@ -6,14 +6,17 @@
   <title>AI Assistant · STE Slicer</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
+  <script src="/analytics.js" defer></script>
 </head>
 <body>
   <aside class="sidebar">
     <div class="brand"><span class="brand-mark">S</span><div>STE Slicer<span class="brand-caption">AI ASSISTANT</span></div></div>
     <button id="new-session" class="button new-session">＋ Новая задача</button>
+    <button id="open-analytics" class="button analytics-nav" type="button" aria-pressed="false">▥ Аналитика</button>
     <div class="section-label">ВАШИ ЗАДАЧИ</div>
     <nav id="sessions" aria-label="Сессии диалога"></nav>
     <div class="sidebar-note">Чаты сохраняются на этом компьютере.<br>Сцена слайсера общая для всех чатов.</div>
+    <button id="llm-settings" class="button">Подключение LLM</button>
   </aside>
   <main>
     <header class="topbar">
@@ -24,6 +27,27 @@
         </button>
       </div>
     </header>
+    <section id="analytics" class="analytics" aria-label="Аналитика подготовки" hidden>
+      <div class="analytics-toolbar">
+        <label>Период активности <select id="analytics-period"><option value="7">7 дней</option><option value="30" selected>30 дней</option><option value="0">Всё время</option></select></label>
+        <span id="analytics-updated" class="muted" role="status"></span>
+        <button id="analytics-refresh" class="button" type="button">Обновить</button>
+        <button id="analytics-export" class="button" type="button">CSV всех задач периода</button>
+        <button id="analytics-back" class="button subtle" type="button">Вернуться в чат</button>
+      </div>
+      <p class="analytics-caption">История анализа — за выбранный период. Состояния, препятствия и сохранённые комплекты — текущие данные задач, активных за этот период. Все расчёты выполняются на этом компьютере.</p>
+      <div id="analytics-error" class="notice" role="alert" hidden></div>
+      <div id="analytics-content" aria-busy="false"></div>
+      <section class="analytics-panel">
+        <div class="analytics-heading"><h2>Задачи</h2><span id="analytics-task-count" class="muted"></span></div>
+        <div class="analytics-filters">
+          <label class="sr-only" for="analytics-search">Поиск по названию задачи</label><input id="analytics-search" type="search" placeholder="Найти задачу по названию…" maxlength="120">
+          <label class="sr-only" for="analytics-filter">Фильтр задач</label><select id="analytics-filter"><option value="all">Все задачи</option><option value="attention">Требуют внимания</option><option value="ready">Есть актуальный G-code</option><option value="saved">Есть сохранённый комплект</option></select>
+        </div>
+        <div id="analytics-tasks"></div>
+        <div class="analytics-pages"><button id="analytics-prev" class="button subtle" type="button">← Назад</button><span id="analytics-page"></span><button id="analytics-next" class="button subtle" type="button">Далее →</button></div>
+      </section>
+    </section>
     <section class="context" aria-label="Текущие настройки слайсера">
       <div><span class="context-label">Принтер</span><strong id="printer">—</strong></div>
       <div><span class="context-label">Режим</span><strong id="mode">—</strong></div>
@@ -31,7 +55,7 @@
       <div><span class="context-label">Профиль</span><strong id="profile">—</strong></div>
       <p id="context-error" class="context-error" hidden></p>
     </section>
-    <div class="task-line"><span id="connection" class="connection">Подключение…</span><span id="task-state"></span></div>
+    <div class="task-line"><span id="connection" class="connection">Подключение…</span><span id="task-state"></span><button id="analyze" class="button subtle">Повторить анализ</button><button id="stop-run" class="button subtle" hidden>Остановить</button></div>
     <section id="messages" class="messages" aria-label="История задачи" aria-live="polite"></section>
     <div class="compose-area">
       <div id="notice" class="notice" role="alert" hidden></div>
@@ -46,7 +70,7 @@
         </div>
         <input id="file-input" type="file" multiple accept=".stl,.obj,.3mf,.jpg,.jpeg,.png" hidden>
       </form>
-      <p class="footer-note">Первый этап: описание задачи и загрузка моделей. Подбор параметров ассистентом появится позже.</p>
+      <p class="footer-note">Изменения применяются после согласования плана. Инженерные ограничения показаны в карте задачи.</p>
     </div>
     <div id="file-drop-overlay" class="file-drop-overlay" hidden>
       <div class="file-drop-card"><strong id="file-drop-title">Отпустите файлы, чтобы прикрепить</strong><span>STL · OBJ · 3MF · JPG · PNG</span></div>
@@ -59,5 +83,17 @@
     </form>
   </dialog>
   <dialog id="image-dialog"><button id="close-image" class="button">Закрыть</button><img id="image-preview" alt="Прикреплённое изображение"></dialog>
+  <dialog id="llm-dialog">
+    <form id="llm-form"><h2>Подключение LLM</h2>
+      <label for="llm-url">Base URL</label><input id="llm-url" type="url" placeholder="https://…/v1" required>
+      <label for="llm-model">Модель</label><input id="llm-model" required maxlength="160">
+      <label for="llm-key">API key</label>
+      <p id="key-state" class="key-status" role="status"></p>
+      <input id="llm-key" type="password" autocomplete="new-password" aria-describedby="key-help" placeholder="Введите ключ">
+      <p id="key-help" class="key-help">После сохранения поле очищается. Сам ключ остаётся в настройках STE Slicer и не показывается в браузере. Пустое поле не удаляет сохранённый ключ.</p>
+      <p id="llm-result" role="status"></p>
+      <div class="dialog-actions"><button id="clear-key" class="button" type="button">Удалить ключ</button><button id="test-llm" class="button" type="button">Проверить подключение</button><button class="button primary" type="submit">Сохранить</button><button id="close-llm" class="button" type="button">Закрыть</button></div>
+    </form>
+  </dialog>
 </body>
 </html>

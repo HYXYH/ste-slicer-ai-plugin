@@ -3,6 +3,7 @@ import copy
 import datetime
 import json
 import os
+import shutil
 import threading
 import uuid
 
@@ -16,9 +17,11 @@ def now():
 
 
 class ApiError(Exception):
-    def __init__(self, message, status=400):
+    def __init__(self, message, status=400, code="INVALID_ARGUMENTS", details=None):
         super().__init__(message)
         self.status = status
+        self.code = code
+        self.details = details or {}
 
 
 class SessionStore:
@@ -28,15 +31,31 @@ class SessionStore:
         os.makedirs(root, exist_ok=True)
         self.path = os.path.join(root, "sessions.json")
         self.run_id = uid()
-        self.data = {"version": 1, "active_session_id": None, "sessions": {}}
+        self.data = {"version": 2, "active_session_id": None, "sessions": {}}
         if os.path.exists(self.path):
             with open(self.path, "r", encoding="utf-8") as source:
                 loaded = json.load(source)
-            if loaded.get("version") != 1 or not isinstance(loaded.get("sessions"), dict):
+            if loaded.get("version") not in (1, 2) or not isinstance(loaded.get("sessions"), dict):
                 raise RuntimeError("Неподдерживаемый формат sessions.json")
+            if loaded["version"] == 1:
+                backup = self.path + ".v1.bak"
+                if not os.path.exists(backup):
+                    shutil.copy2(self.path, backup)
+                loaded["version"] = 2
             self.data = loaded
         # Scene object identifiers only have meaning in the running application.
         for session in self.data["sessions"].values():
+            self._extend(session)
+            for run in session["runs"].values():
+                if run["status"] in ("queued", "running"):
+                    run["status"] = "interrupted"
+                    session["workflow_state"] = "interrupted"
+            for plan in session["plans"].values():
+                plan["status"] = "stale"
+            session["task_map"]["snapshot_ref"] = None
+            session["task_map"]["readiness"] = {"status": "stale", "reasons": ["Приложение перезапущено"]}
+            if session["plans"]:
+                session["workflow_state"] = "stale"
             for attachment in session["files"].values():
                 attachment["scene_present"] = False
                 if attachment["status"] in ("queued", "importing"):
@@ -46,9 +65,9 @@ class SessionStore:
                     attachment["status"] = "saved"
                 attachment["object_ids"] = []
             for operation in session["operations"].values():
-                if operation["status"] in ("queued", "importing"):
+                if operation["status"] in ("queued", "importing", "running", "slicing", "applying", "exporting"):
                     operation["status"] = "interrupted"
-                    operation["error"] = "Приложение было закрыто во время импорта."
+                    operation["error"] = "Приложение было закрыто во время операции."
             self._task_status(session)
         if not self.data["sessions"]:
             self.create("Новая задача")
@@ -82,6 +101,7 @@ class SessionStore:
                        "messages": [], "files": {}, "operations": {},
                        "task": {"description": "", "status": "draft"},
                        "requests": {}}
+            self._extend(session)
             self.data["sessions"][session_id] = session
             self.data["active_session_id"] = session_id
             self._save()
@@ -118,6 +138,8 @@ class SessionStore:
         with self.lock:
             result = copy.deepcopy(self._session(session_id))
             result.pop("requests")
+            result.pop("workflow_requests", None)
+            result.pop("action_results", None)
             for attachment in result["files"].values():
                 attachment.pop("path", None)
             return result
@@ -160,6 +182,13 @@ class SessionStore:
             for file_id in file_ids:
                 self.file(session_id, file_id)
             message_id = uid()
+            s["input_revision"] += 1
+            s["task_map"]["input_revision"] = s["input_revision"]
+            for plan in s["plans"].values():
+                if plan["status"] not in ("failed", "stale"):
+                    plan["status"] = "stale"
+            if s["plans"]:
+                s["workflow_state"] = "stale"
             s["messages"].append({"id": message_id, "role": "user", "created_at": now(),
                                   "text": text.strip(), "file_ids": file_ids,
                                   "context": copy.deepcopy(context)})
@@ -184,6 +213,41 @@ class SessionStore:
             s["requests"][request_id] = {"payload": payload, "result": result}
             self._touch(s)
             return result, new_operations
+
+    @staticmethod
+    def _extend(session):
+        from .agent.task_state import new_map
+        for key, value in {"input_revision": 0, "workflow_state": "idle", "runs": {},
+                           "events": [], "plans": {}, "workflow_requests": {},
+                           "action_results": {}, "sources": {}, "exports": []}.items():
+            session.setdefault(key, value)
+        session.setdefault("task_map", new_map())
+
+    def edit(self, session_id, change):
+        """Never call Qt, MCP or the provider from a change callback."""
+        with self.lock:
+            session = self._session(session_id)
+            backup = copy.deepcopy(session)
+            try:
+                result = change(session)
+                self._touch(session)
+                return copy.deepcopy(result)
+            except Exception:
+                self.data["sessions"][session_id] = backup
+                raise
+
+    def internal(self, session_id):
+        with self.lock:
+            return copy.deepcopy(self._session(session_id))
+
+    def event(self, session_id, run_id, kind, **data):
+        def append(session):
+            event = {"id": uid(), "seq": len(session["events"]) + 1, "session_id": session_id,
+                     "run_id": run_id, "created_at": now(), "type": kind}
+            event.update(data)
+            session["events"].append(event)
+            return event
+        return self.edit(session_id, append)
 
     @staticmethod
     def _task_status(session):
@@ -241,6 +305,29 @@ class SessionStore:
                 if local_change:
                     self._task_status(s)
                     s["revision"] += 1
+                    changed = True
+            if changed:
+                self._save()
+
+    def invalidate_snapshot(self, snapshot_ref):
+        with self.lock:
+            changed = False
+            for session in self.data["sessions"].values():
+                local = False
+                for plan in session["plans"].values():
+                    expected = plan.get("applied_snapshot_ref", plan["snapshot_ref"])
+                    if plan["status"] not in ("stale", "failed", "applying") and expected != snapshot_ref:
+                        plan["status"] = "stale"
+                        session["task_map"]["readiness"] = {"status": "stale", "reasons": ["Сцена или настройки изменились"]}
+                        session["workflow_state"] = "stale"
+                        local = True
+                for operation in session["operations"].values():
+                    if operation.get("kind") == "slice" and operation["status"] == "completed" and operation["snapshot_ref"] != snapshot_ref:
+                        operation["status"] = "stale"
+                        session["workflow_state"] = "stale"
+                        local = True
+                if local:
+                    session["revision"] += 1
                     changed = True
             if changed:
                 self._save()

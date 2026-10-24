@@ -56,6 +56,7 @@ function renderList(listing) {
 }
 async function refreshList() { renderList(await api("/api/sessions")); }
 async function selectSession(sid, select = true) {
+  if (window.assistantAnalytics) window.assistantAnalytics.close();
   if (current) draft(current).text = $("description").value;
   current = sid;
   currentSession = null;
@@ -122,9 +123,13 @@ function renderSession(session) {
   if (session.id !== current) return;
   if (session.revision < lastRevision) return;
   currentSession = session;
-  $("session-title").textContent = session.title;
-  $("session-title").title = session.title;
-  $("task-state").textContent = TASK[session.task.status] || session.task.status;
+  if (!window.assistantAnalytics || !window.assistantAnalytics.visible()) {
+    $("session-title").textContent = session.title;
+    $("session-title").title = session.title;
+  }
+  $("task-state").textContent = FLOW[session.workflow_state] || TASK[session.task.status] || session.task.status;
+  $("stop-run").hidden = !Object.values(session.runs || {}).some(r => ["queued", "running"].includes(r.status));
+  $("analyze").disabled = !$("stop-run").hidden;
   const d = draft(session.id);
   if (!d.initialized) {
     const used = new Set(session.messages.flatMap(m => m.file_ids || []));
@@ -147,7 +152,7 @@ function renderSession(session) {
   session.messages.forEach(message => {
     const article = node("article", "message " + message.role);
     const heading = node("div", "message-heading");
-    heading.append(node("span", "", message.role === "user" ? "Вы" : "Система"),
+    heading.append(node("span", "", message.role === "user" ? "Вы" : message.role === "assistant" ? "Ассистент" : "Система"),
       node("time", "", new Date(message.created_at).toLocaleTimeString("ru", {hour:"2-digit", minute:"2-digit"})));
     article.append(heading);
     if (message.text) article.append(node("div", "message-body", message.text));
@@ -160,6 +165,7 @@ function renderSession(session) {
     }
     area.append(article);
   });
+  renderWorkflow(session, area);
   area.scrollTop = atBottom ? area.scrollHeight : oldScroll;
 }
 async function loadSession(sid) {
@@ -174,13 +180,14 @@ async function sendMessage(sid, text, fileIds, retryId) {
   if (busy.has(sid)) return;
   busy.add(sid); updateButtons(); notice("");
   try {
-    await api(sessionPath(sid) + "/messages", "POST", {
+    const sent = await api(sessionPath(sid) + "/messages", "POST", {
       request_id:retryId || requestId(), text, file_ids:fileIds
     });
     const d = draft(sid);
     if (retryId) { d.text = ""; d.files = []; d.request = null; }
     if (sid === current) { if (retryId) $("description").value = ""; await loadSession(sid); }
     await refreshList();
+    if (sid === current && !sent.run_id) notice("Сообщение сохранено. Подключите LLM через кнопку слева, затем нажмите «Повторить анализ».");
   } finally { busy.delete(sid); updateButtons(); }
 }
 $("composer").onsubmit = async event => {
@@ -236,6 +243,7 @@ function resetFileDrag() {
 document.addEventListener("dragenter", event => {
   if (!isFileDrag(event)) return;
   event.preventDefault();
+  if (window.assistantAnalytics && window.assistantAnalytics.visible()) return;
   fileDragDepth += 1;
   $("file-drop-title").textContent = current && currentSession && !busy.has(current)
     ? "Отпустите файлы, чтобы прикрепить" : "Дождитесь завершения текущей операции";
@@ -245,7 +253,7 @@ document.addEventListener("dragover", event => {
   if (!isFileDrag(event)) return;
   // Prevent the browser from navigating to the dropped file, including outside the composer.
   event.preventDefault();
-  event.dataTransfer.dropEffect = current && currentSession && !busy.has(current) ? "copy" : "none";
+  event.dataTransfer.dropEffect = current && currentSession && !busy.has(current) && !(window.assistantAnalytics && window.assistantAnalytics.visible()) ? "copy" : "none";
 });
 document.addEventListener("dragleave", () => {
   if (fileDragDepth > 0 && --fileDragDepth === 0) resetFileDrag();
@@ -256,6 +264,7 @@ document.addEventListener("drop", async event => {
   resetFileDrag();
   if (!fileDrop) return;
   event.preventDefault();
+  if (window.assistantAnalytics && window.assistantAnalytics.visible()) return;
   const items = Array.from(event.dataTransfer.items || []);
   if (items.some(item => {
     const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
@@ -298,10 +307,19 @@ async function poll() {
   if (polling) return;
   polling = true;
   try {
+    if (window.assistantAnalytics && window.assistantAnalytics.visible()) {
+      await window.assistantAnalytics.refresh();
+      return;
+    }
     const sid = current;
     const [context, listing] = await Promise.all([api("/api/context"), api("/api/sessions")]);
     renderContext(context); renderList(listing);
-    if (sid && sid === current) await loadSession(sid);
+    if (window.assistantAnalytics && window.assistantAnalytics.visible()) return;
+    if (sid && sid === current) {
+      await loadSession(sid);
+      const latest = await api(sessionPath(sid) + "/events?after=" + (eventSeq.get(sid) || 0));
+      if (latest.events.length) eventSeq.set(sid, latest.events[latest.events.length - 1].seq);
+    }
     $("connection").textContent = "Локальное подключение";
     $("connection").classList.remove("offline");
   } catch (e) {
@@ -318,4 +336,198 @@ async function boot() {
     setInterval(poll, 2000);
   } catch (e) { notice(e.message); $("connection").textContent = "Нет подключения"; }
 }
+const FLOW = {idle:"Готов к работе", queued:"Анализ в очереди", waiting_import:"Ожидание импорта", analyzing:"Анализ задачи…", waiting_user:"Нужны уточнения", plan_ready:"План готов к согласованию", applying:"Применение плана…", slicing:"Расчёт G-code…", result_ready:"Результат готов", exporting:"Сохранение файлов…", completed:"Файлы сохранены", failed:"Операция остановлена с ошибкой", cancelled:"Анализ остановлен", interrupted:"Работа прервана перезапуском", stale:"Данные устарели — повторите анализ"};
+const eventSeq = new Map();
+const TOOL_LABEL = {get_scene_snapshot:"Сцена и размеры", get_printer_capabilities:"Возможности принтера", get_current_configuration:"Текущие настройки", get_setting_definitions:"Ограничения настроек", list_materials:"Каталог материалов", find_compatible_profiles:"Совместимые профили", search_knowledge:"Экспертная база", set_print_mode:"Режим печати", select_material:"Выбор материала", select_quality_profile:"Выбор профиля", set_settings:"Изменение настроек", set_object_transform:"Положение, поворот и масштаб", arrange_objects:"Расстановка", remove_objects:"Удаление моделей", create_quality_profile:"Создание профиля", save_quality_profile:"Сохранение профиля"};
+function button(label, action, primary = false) {
+  const b = node("button", "button" + (primary ? " primary" : ""), label); b.type = "button";
+  b.onclick = async () => { b.disabled = true; try { await action(); } catch (e) { notice(e.message); } finally { b.disabled = false; } };
+  return b;
+}
+function panel(title, parent) { const p = node("section", "workflow-card"); p.append(node("h3", "", title)); parent.append(p); return p; }
+function human(value) {
+  if (value === null || value === undefined) return "не определено";
+  if (Array.isArray(value)) return value.map(human).join(", ");
+  if (typeof value === "object") return Object.entries(value).map(([key, v]) => key + ": " + human(v)).join("; ");
+  return value === true ? "да" : value === false ? "нет" : String(value);
+}
+async function answer(sid, payload) {
+  await api(sessionPath(sid) + "/answers", "POST", {request_id:requestId(), ...payload});
+  if (sid === current) await loadSession(sid);
+}
+function renderWorkflow(session, area) {
+  const sid = session.id, map = session.task_map;
+  if (!map) return;
+  const latestRun = Object.values(session.runs || {}).sort((a,b) => (a.created_at || "").localeCompare(b.created_at || "")).slice(-1)[0];
+  const currentEvents = latestRun ? session.events.filter(e => e.run_id === latestRun.id || Date.parse(e.created_at) >= Date.parse(latestRun.created_at)) : session.events;
+  const currentEventIds = new Set(currentEvents.map(e => e.id));
+  const active = latestRun && ["queued", "running"].includes(latestRun.status);
+  if (active) {
+    const box = panel("Анализ выполняется", area);
+    const progress = currentEvents.filter(e => e.type === "progress" || e.type === "tool_started").slice(-1)[0];
+    box.append(node("p", "", progress ? progress.message || (TOOL_LABEL[progress.tool] || progress.tool) : "Задача в очереди на анализ."),
+      node("p", "muted", "Готовый план появится отдельной карточкой с кнопкой согласования. Ошибки предыдущих запусков находятся в отдельной истории ниже."));
+  }
+  if (["failed", "cancelled", "interrupted"].includes(session.workflow_state)) {
+    const latest = currentEvents.filter(e => e.type === "error").slice(-1)[0];
+    if (latest) panel("Работа остановлена", area).append(node("p", "warning", latest.message));
+  }
+  if (map.facts.length || map.requirements.length) {
+    const known = panel("Известно", area);
+    map.requirements.concat(map.constraints).forEach(r => known.append(node("p", "", r.key + ": " + human(r.value) + (r.unit ? " " + r.unit : "") + (r.strength === "hard" ? " · обязательное" : ""))));
+    map.facts.filter(f => f.key === "scene").forEach(f => (f.value.objects || []).forEach(o => known.append(node("p", "", o.name + " · " + human(o.dimensions_mm) + " мм"))));
+  }
+  const questions = map.questions.filter(q => !q.answer).slice(0, 3);
+  const sceneFact = map.facts.find(f => f.key === "scene");
+  const foreign = sceneFact ? sceneFact.value.objects.filter(o => o.printable && !map.target_object_ids.includes(o.id)) : [];
+  if (foreign.length) {
+    const box = panel("Другие модели в общей сцене", area);
+    box.append(node("p", "", foreign.map(o => o.name).join(", ")),
+      button("Включить эти модели в задачу", () => answer(sid, {include_object_ids:foreign.map(o => o.id)})));
+    box.append(node("p", "muted", "Можно также убрать лишние модели в STE Slicer и повторить анализ."));
+  }
+  if (questions.length) {
+    const box = panel("Нужно уточнить", area);
+    questions.forEach(q => {
+      const question = node("div", "question"); question.append(node("strong", "", q.text), node("p", "muted", q.reason));
+      const options = node("div", "workflow-actions");
+      (q.options || []).forEach(option => options.append(button(option.label, () => answer(sid, {answers:[{question_id:q.id,value:option.label}]}))));
+      if (q.allow_unknown) options.append(button("Не знаю", () => answer(sid, {answers:[{question_id:q.id,value:"Не знаю"}]})));
+      question.append(options);
+      if (q.allow_free_text) {
+        const input = node("input"); input.placeholder = "Ваш ответ"; input.maxLength = 20000;
+        input.setAttribute("aria-label", q.text);
+        question.append(input, button("Ответить", () => answer(sid, {answers:[{question_id:q.id,value:input.value}]})));
+      }
+      box.append(question);
+    });
+  }
+  const assumptions = map.assumptions.filter(a => a.acceptance === "pending");
+  if (assumptions.length) {
+    const box = panel("Допущения требуют вашего согласия", area);
+    assumptions.forEach(a => {
+      const p = node("div", "question"); p.append(node("p", "", a.key + ": " + human(a.value) + ". " + (a.reason || "")),
+        button("Принять", () => answer(sid, {assumptions:[{id:a.id,accepted:true}]})), button("Отклонить", () => answer(sid, {assumptions:[{id:a.id,accepted:false}]})));
+      box.append(p);
+    });
+  }
+  const limitations = (map.readiness.reasons || []).concat(map.unknowns.filter(u => u.blocking && !u.resolved).map(u => u.reason));
+  if (limitations.length || map.conflicts.some(c => !c.resolved)) {
+    const box = panel(active ? "Ограничения предыдущего анализа · обновляются" : "Ограничения", area);
+    limitations.forEach(reason => box.append(node("p", "", reason)));
+    map.conflicts.filter(c => !c.resolved).forEach(c => {
+      box.append(node("p", "", c.reason || "Противоречие: " + c.id));
+      const input = node("input"); input.placeholder = "Укажите, какое требование считать действующим"; input.setAttribute("aria-label", input.placeholder);
+      box.append(input, button("Разрешить противоречие", () => answer(sid, {conflict_resolutions:[{id:c.id,reason:input.value}]})));
+    });
+  }
+  if ((map.readiness.failed_check_ids || []).length) {
+    const box = panel("Ручная инженерная проверка", area);
+    box.append(node("p", "muted", "Подтверждайте требование только после фактической проверки. Укажите метод, источник и результат."));
+    map.requirements.concat(map.constraints).filter(r => map.readiness.failed_check_ids.includes(r.id)).forEach(r => {
+      const input = node("input"); input.placeholder = "Основание проверки: " + r.key; input.setAttribute("aria-label", input.placeholder);
+      box.append(input, button("Подтвердить проверку", () => answer(sid, {manual_checks:[{requirement_id:r.id,reason:input.value}]})));
+    });
+  }
+  Object.values(session.plans).forEach(plan => {
+    const box = panel("План печати · версия " + plan.version, area);
+    box.append(node("p", "", "Режим: " + ({classic:"3D", cylindrical:"5D Spiral", cylindrical_full:"5D"}[plan.selected.mode] || plan.selected.mode)));
+    box.append(node("p", "", "Материал: " + plan.selected.material_id + " · профиль: " + plan.selected.profile_id));
+    if (plan.status === "stale") box.append(node("p", "warning", "План устарел. Повторите анализ."));
+    plan.actions.forEach(a => {
+      const row = node("div", "plan-action"); row.append(node("strong", "", TOOL_LABEL[a.tool] || a.tool), node("p", "", human(a.before) + " → " + human(a.after)), node("p", "muted", a.reason)); box.append(row);
+    });
+    if (!plan.actions.length) box.append(node("p", "", "Сохранить текущие настройки профиля и рассчитать G-code."));
+    plan.limitations.forEach(l => box.append(node("p", "warning", l)));
+    if (["validated", "approved"].includes(plan.status)) box.append(button("Согласовать, применить и рассчитать", async () => {
+      await api(sessionPath(sid) + "/plans/" + plan.id + "/approve", "POST", {version:plan.version});
+      await api(sessionPath(sid) + "/plans/" + plan.id + "/apply", "POST", {request_id:plan.id + "-apply"});
+      if (sid === current) await loadSession(sid);
+    }, true));
+  });
+  const slices = Object.values(session.operations).filter(o => o.kind === "slice");
+  slices.forEach(op => {
+    const box = panel("Слайсинг", area);
+    box.append(node("p", "", op.status === "slicing" ? "Расчёт…" + (op.progress === null ? "" : " " + Math.round(op.progress * 100) + "%") : op.status === "completed" ? "Расчёт завершён" : "Результат требует проверки: " + op.status));
+    if (op.error) box.append(node("p", "warning", op.error));
+    if (op.result) box.append(node("p", "", "Время: " + human(op.result.time) + " · материал: " + human(op.result.material)));
+    if (op.status === "completed" && session.workflow_state !== "stale") {
+      const overwrite = node("input"); overwrite.type = "checkbox";
+      const label = node("label", "overwrite"); label.append(overwrite, document.createTextNode(" Разрешаю замену project.3mf и result.gcode в выбранной папке"));
+      box.append(label, button("Выбрать папку и сохранить", async () => {
+        const target = await api(sessionPath(sid) + "/export-target", "POST", {request_id:requestId(),overwrite:overwrite.checked});
+        const selected = await waitOperation(sid, target.operation_id);
+        if (selected.result.cancelled) return;
+        const exported = await api(sessionPath(sid) + "/exports", "POST", {request_id:requestId(), operation_id:op.id, export_target_id:selected.result.export_target_id});
+        await waitOperation(sid, exported.operation_id);
+        if (sid === current) { notice("Проект и G-code сохранены."); await loadSession(sid); }
+      }, true));
+    }
+  });
+  session.exports.forEach(result => {
+    const box = panel(result.partial ? "Сохранено частично" : "Сохранённые файлы", area);
+    result.files.forEach(f => box.append(node("p", "", f.filename + " · " + f.size + " байт")));
+  });
+  function eventHistory(events, title) {
+    const details = node("details", "workflow-card");
+    const operations = new Map();
+    events.filter(e => e.operation_id && e.tool).forEach(e => {
+      const key = e.operation_id, record = operations.get(key) || {}; operations.set(key, {...record,...e});
+    });
+    const errors = events.filter(e => e.type === "error").slice(-5);
+    const rejected = events.filter(e => e.type === "model_output_rejected").slice(-3);
+    if (!operations.size && !errors.length && !rejected.length) return;
+    details.append(node("summary", "", title + " · инструментов: " + operations.size));
+    operations.forEach(event => {
+      const item = node("details", "tool-event");
+      item.append(node("summary", "", (TOOL_LABEL[event.tool] || event.tool) + " · " + ({tool_started:"выполняется",tool_finished:"готово",tool_failed:"ошибка"}[event.type] || event.type)), node("pre", "", JSON.stringify({arguments:event.arguments,result:event.result,error:event.message}, null, 2))); details.append(item);
+    });
+    errors.forEach(e => details.append(node("p", "warning", new Date(e.created_at).toLocaleTimeString("ru-RU") + " · " + e.message)));
+    rejected.forEach(e => {
+      const item = node("details", "tool-event");
+      item.append(node("summary", "", "Проверка ответа LLM №" + e.request_number + " · формат не принят"), node("p", "warning", e.message));
+      details.append(item);
+    });
+    area.append(details);
+  }
+  eventHistory(currentEvents, "Действия текущего запуска");
+  eventHistory(session.events.filter(e => !currentEventIds.has(e.id)), "Предыдущие запуски");
+}
+async function waitOperation(sid, oid) {
+  for (;;) {
+    const result = await api(sessionPath(sid) + "/operations/" + oid);
+    if (result.status === "completed") return result;
+    if (["error", "interrupted", "stale"].includes(result.status)) throw new Error(result.error || "Операция прервана");
+    await new Promise(resolve => setTimeout(resolve, 750));
+  }
+}
+$("analyze").onclick = async () => {
+  if (!current) return;
+  try { const sid = current; await api(sessionPath(sid) + "/runs", "POST", {request_id:requestId()}); await loadSession(sid); } catch(e) { notice(e.message); }
+};
+$("stop-run").onclick = async () => {
+  if (!currentSession) return;
+  const sid = current;
+  try { for (const run of Object.values(currentSession.runs).filter(r => ["queued", "running"].includes(r.status))) await api(sessionPath(sid) + "/runs/" + run.id + "/cancel", "POST", {}); await loadSession(sid); } catch(e) { notice(e.message); }
+};
+async function settingsState() {
+  const config = await api("/api/settings/llm"); $("llm-url").value = config.base_url; $("llm-model").value = config.model; $("llm-key").value = "";
+  $("key-state").textContent = config.key_configured ? "✓ Ключ сохранён в STE Slicer" : "Ключ пока не задан";
+  $("key-state").classList.toggle("configured", config.key_configured);
+  $("llm-key").placeholder = config.key_configured ? "Ключ уже сохранён. Введите новый только для замены" : "Введите API key";
+  $("clear-key").disabled = !config.key_configured;
+  return config;
+}
+$("llm-settings").onclick = async () => { try { await settingsState(); $("llm-result").textContent = ""; $("llm-dialog").showModal(); } catch(e) { notice(e.message); } };
+$("close-llm").onclick = () => { $("llm-key").value = ""; $("llm-dialog").close(); };
+async function saveSettings() {
+  await api("/api/settings/llm", "PATCH", {base_url:$("llm-url").value,model:$("llm-model").value,api_key:$("llm-key").value}); return settingsState();
+}
+$("llm-form").onsubmit = async event => { event.preventDefault(); try { const config = await saveSettings(); $("llm-result").textContent = config.key_configured ? "Настройки сохранены. Ключ сохранён в STE Slicer; поле очищено, чтобы не показывать секрет." : "Настройки сохранены. API key пока не задан."; } catch(e) { $("llm-result").textContent = e.message; } };
+$("clear-key").onclick = async () => { try { await api("/api/settings/llm/clear-key", "POST", {}); await settingsState(); $("llm-result").textContent = "Ключ удалён"; } catch(e) { $("llm-result").textContent = e.message; } };
+$("test-llm").onclick = async () => {
+  const sid = current; $("test-llm").disabled = true; $("llm-result").textContent = "Проверяем подключение…";
+  try { await saveSettings(); const op = await api("/api/settings/llm/test", "POST", {session_id:sid,request_id:requestId()}); const result = await waitOperation(sid, op.operation_id); $("llm-result").textContent = result.endpoint + "\n" + result.text + "\nВызовы инструментов этим запросом не проверяются."; }
+  catch(e) { $("llm-result").textContent = e.message; } finally { $("test-llm").disabled = false; }
+};
 boot();

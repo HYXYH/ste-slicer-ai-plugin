@@ -22,7 +22,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        server.stop()
 
 
 if __name__ == "__main__":

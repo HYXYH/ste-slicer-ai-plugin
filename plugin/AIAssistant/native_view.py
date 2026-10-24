@@ -1,6 +1,7 @@
 """Safe rich text for the native Qt window. No JavaScript or web engine."""
 import html
 import json
+from .activity import conversation_timeline
 
 
 FLOW = {"idle": "Готов к работе", "queued": "Анализ в очереди", "waiting_import": "Ожидание импорта",
@@ -93,7 +94,16 @@ def session_document(session, history=False, include_messages=True):
     if include_messages and not session["messages"]:
         doc.parts.append(card("Начните с детали и её задачи", paragraph("Прикрепите 3D-модель и опишите, для чего нужна деталь.") +
                               paragraph("Ассистент уточнит требования, подготовит план и поможет сохранить проект и G-code.", True), "#eaf1ff"))
-    for message in session["messages"] if include_messages else []:
+    for message in conversation_timeline(session) if include_messages else []:
+        if message["type"] == "activity":
+            expanded = history is True or isinstance(history, set) and message["id"] in history
+            body = doc.link(("▾ " if expanded else "▸ ") + message["summary"], "history", group_id=message["id"])
+            if expanded:
+                for action in message["operations"]:
+                    body += doc.link(action["command"] + " · " + {"tool_finished": "готово", "tool_failed": "ошибка", "tool_started": "выполняется", "interrupted": "прервано"}[action["status"]],
+                                     "action", start_id=action["start_event_id"], finish_id=action["finish_event_id"])
+            doc.parts.append(body)
+            continue
         role = {"user": "Вы", "assistant": "Ассистент", "system": "Система"}.get(message["role"], "Сообщение")
         body = paragraph(message.get("text") or "")
         for fid in message.get("file_ids", []):
@@ -105,7 +115,10 @@ def session_document(session, history=False, include_messages=True):
                 body += paragraph(f["error"])
             if f.get("kind") == "image":
                 body += doc.link("Посмотреть изображение", "image", file_id=fid)
-            elif f["status"] in ("saved", "error", "interrupted"):
+            elif f.get("kind") == "document":
+                body += paragraph("Текст извлечён · " + str(f.get("text_characters", 0)) + " символов", True)
+                body += doc.link("Посмотреть текст", "document", file_id=fid)
+            elif f["kind"] == "model" and f["status"] in ("saved", "error", "interrupted"):
                 body += doc.link("Загрузить в сцену", "import", file_id=fid)
         doc.parts.append(card(role, body, "#edf3ff" if message["role"] == "user" else "#ffffff"))
     task = session.get("task_map") or {}
@@ -197,20 +210,6 @@ def session_document(session, history=False, include_messages=True):
         doc.parts.append(card("Слайсинг", body))
     for result in session.get("exports", []):
         doc.parts.append(card("Сохранено частично" if result.get("partial") else "Сохранённые файлы", ''.join(paragraph(f["filename"] + " · " + str(f["size"]) + " байт") for f in result["files"])))
-    doc.parts.append(doc.link("Скрыть историю действий" if history else "Показать историю действий", "history"))
-    if history:
-        for title, group in (("Текущий запуск", current_events), ("Предыдущие запуски", [e for e in events if e not in current_events])):
-            body = ''
-            for e in group:
-                if e["type"] in ("tool_started", "tool_finished", "tool_failed", "error", "model_output_rejected"):
-                    label = TOOLS.get(e.get("tool"), e.get("tool")) or e["type"]
-                    body += paragraph(label + " · " + e["type"] + (": " + e["message"] if e.get("message") else ""))
-                    if e.get("result") or e.get("arguments"):
-                        body += '<p style="font-family:Consolas;font-size:11px">' + text(json.dumps({k: e[k] for k in ("arguments", "result") if k in e}, ensure_ascii=False, indent=2)) + '</p>'
-                    elif e.get("has_details"):
-                        body += doc.link("Подробности действия", "event", event_id=e["id"])
-            if body:
-                doc.parts.append(card(title, body))
     for action in doc.actions.values():
         action["session_id"] = sid
     return doc.finish()

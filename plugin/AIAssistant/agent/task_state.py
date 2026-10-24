@@ -174,6 +174,11 @@ def readiness(task, scene, sources):
     if task["snapshot_ref"] != scene["snapshot_ref"]:
         result.update(status="stale", reasons=["Сцена или настройки изменились"])
         return result
+    from ..task_data import coverage
+    data = coverage({"task_map": task, "sources": sources})
+    if any(row["conflict"] for row in data.values()):
+        result.update(status="blocked", reasons=["Уточните противоречивые исходные данные"])
+        return result
     result["conflict_ids"] = [r["id"] for r in task["conflicts"] if not r.get("resolved")]
     selected = [r for r in task["candidates"] if r.get("status") == "selected"]
     considered = selected if len(selected) == 1 else [c for c in task["candidates"] if c.get("status") == "possible"]

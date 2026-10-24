@@ -9,6 +9,7 @@ from .session import ApiError, uid, now
 MAX_FILE_SIZE = 100 * 1024 * 1024
 MODEL_EXTENSIONS = (".stl", ".obj", ".3mf")
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
+DOCUMENT_EXTENSIONS = (".docx",)
 
 
 def validate(path, extension):
@@ -105,8 +106,8 @@ def receive(store, session_id, name, stream, length):
     if not isinstance(name, str) or not name or len(name) > 255 or any(c in name for c in ("/", "\\", "\x00")):
         raise ApiError("Недопустимое имя файла")
     extension = os.path.splitext(name)[1].lower()
-    if extension not in MODEL_EXTENSIONS + IMAGE_EXTENSIONS:
-        raise ApiError("Поддерживаются STL, OBJ, 3MF, JPG и PNG", 415)
+    if extension not in MODEL_EXTENSIONS + IMAGE_EXTENSIONS + DOCUMENT_EXTENSIONS:
+        raise ApiError("Поддерживаются STL, OBJ, 3MF, JPG, PNG и DOCX. Сохраните старый DOC в формате DOCX", 415)
     if length <= 0 or length > MAX_FILE_SIZE:
         raise ApiError("Размер файла должен быть от 1 байта до 100 МиБ", 413)
     file_id = uid()
@@ -123,11 +124,16 @@ def receive(store, session_id, name, stream, length):
                 target.write(chunk)
                 remaining -= len(chunk)
         validate(path, extension)
+        document = {}
+        if extension in DOCUMENT_EXTENSIONS:
+            from .documents import extract_docx
+            document["document_text"] = extract_docx(path)
+            document["text_characters"] = len(document["document_text"])
         return store.add_file(session_id, {
             "id": file_id, "name": name, "extension": extension, "size": length,
-            "kind": "model" if extension in MODEL_EXTENSIONS else "image",
+            "kind": "model" if extension in MODEL_EXTENSIONS else "document" if extension in DOCUMENT_EXTENSIONS else "image",
             "path": path, "created_at": now(), "status": "saved", "error": None,
-            "scene_present": False, "object_ids": []})
+            "scene_present": False, "object_ids": [], **document})
     except Exception:
         if os.path.exists(path):
             os.remove(path)

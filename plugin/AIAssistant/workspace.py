@@ -10,13 +10,10 @@ import threading
 
 from .session import ApiError, uid, now
 from .uploads import receive
+from .task_data import FIELDS, LABELS, known_answer, coverage, set_answer
 
 VERSION = 1
-THRESHOLD = 80
 TOLERANCE_MM = .2
-FIELDS = {"load": "Какая нагрузка ожидается? Укажите величину и единицы или «не применяется».",
-          "temperature": "Какова рабочая температура детали? Укажите °C или «не применяется».",
-          "environment": "В какой среде будет работать деталь: помещение, УФ, влага, химия?"}
 OBSERVATIONS = {"dimensions_check": "Чем и в каких направлениях измерен куб? Повторите измерение отклонившихся осей. Автоматическую коррекцию масштаба по одному кубу не применяем.",
                 "adhesion_context": "Где произошёл отрыв: по углам или по всему основанию? Опишите состояние поверхности стола и первого слоя.",
                 "layer_context": "Где видны пропуски или расслоение? Были ли щелчки экструдера, обрыв подачи или отрыв детали?",
@@ -25,10 +22,6 @@ OBSERVATIONS = {"dimensions_check": "Чем и в каких направлен�
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False).encode("utf-8")).hexdigest()
-
-
-def known_answer(value):
-    return bool(value.strip()) and value.strip().casefold().strip(".! ") not in ("не знаю", "unknown", "неизвестно", "нет данных", "не определено", "?")
 
 
 class Workspace:
@@ -126,7 +119,9 @@ class Workspace:
         session = self.store.internal(sid)
         process = self.process()
         context = process["context"]
-        answers = session.get("assessment_answers", {})
+        fields = coverage(session)
+        answers = {key: "; ".join(row["values"]) for key, row in fields.items() if row["known"]}
+        observations = session.get("assessment_answers", {})
         models = [f for f in session["files"].values() if f["kind"] == "model"]
         try:
             scene = self.bridge.call("get_scene_snapshot", {})
@@ -136,7 +131,7 @@ class Workspace:
         objects = [o for o in scene["objects"] if o["id"] in targets]
         dimensions = bool(objects) and all(isinstance(o.get("dimensions_mm"), list) and len(o["dimensions_mm"]) == 3 and
                                          all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0 for v in o["dimensions_mm"]) for o in objects)
-        geometry = 25 if dimensions and targets.issubset(set(o["id"] for o in objects)) else 0
+        geometry = (10 if objects else 0) + (20 if dimensions and targets.issubset(set(o["id"] for o in objects)) else 0)
         compatible = False
         if process.get("profile_id"):
             try:
@@ -149,62 +144,65 @@ class Workspace:
             except ApiError:
                 pass
         configuration = (5 if context.get("printer") else 0) + (5 if context.get("mode") else 0) + (
-            5 if any((e.get("material") or {}).get("id") for e in context.get("extruders", [])) else 0) + (10 if compatible else 0)
-        requirements = (5 if session["task"]["description"].strip() else 0) + sum(5 for key in FIELDS if known_answer(answers.get(key, "")))
-        if session.get("calibration_for"):
-            requirements = 20
+            10 if any((e.get("material") or {}).get("id") for e in context.get("extruders", [])) else 0) + (10 if compatible else 0)
+        required = [row for row in fields.values() if row["required"]]
+        requirements = round(40 * sum(row["known"] for row in required) / len(required))
+        missing = [key for key, row in fields.items() if row["required"] and not row["known"]]
+        data_conflicts = ["Уточните " + LABELS[key] + ": " + "; ".join(row["values"]) for key, row in fields.items() if row["conflict"]]
+        data_conflicts += [c["reason"] for c in session["task_map"].get("conflicts", []) if not c.get("resolved")]
         records = []
         if process.get("signature"):
             for row in self.store.listing()["sessions"]:
                 records += [r for r in self.store.internal(row["id"]).get("calibration_results", []) if r["process_signature"] == process["signature"]]
         record = max(records, key=lambda r: r["created_at"]) if records else None
-        calibration = 0
-        if record:
-            calibration = sum(weight for axis, weight in zip(("x_mm", "y_mm", "z_mm"), (7, 7, 6)) if abs(record[axis] - 20) <= TOLERANCE_MM)
-            calibration += (4 if record["adhesion_ok"] else 0) + (3 if record["layers_ok"] else 0) + (3 if record["surface_ok"] else 0)
-        components = [{"id": "geometry", "title": "Модель и размеры", "score": geometry, "maximum": 25,
-                       "reason": "Габариты целевых моделей прочитаны из сцены" if geometry else "Загрузите целевую модель в сцену"},
-                      {"id": "configuration", "title": "Материал и профиль", "score": configuration, "maximum": 25,
-                       "reason": "Совместимость текущего профиля подтверждена" if compatible else "Нужен совместимый профиль текущей конфигурации"},
-                      {"id": "requirements", "title": "Условия эксплуатации", "score": requirements, "maximum": 20,
-                       "reason": "Калибровочный образец: эксплуатационные требования не применяются" if session.get("calibration_for") else "Назначение и условия указаны пользователем" if requirements == 20 else "Уточните нагрузку, температуру и среду"},
-                      {"id": "calibration", "title": "Результат калибровки", "score": calibration, "maximum": 30,
-                       "reason": "Измерения куба для текущих настроек" if record else "Для текущих настроек нет измеренного куба"}]
-        questions = [{"field": k, "text": FIELDS[k]} for k in sorted(FIELDS) if not known_answer(answers.get(k, ""))]
-        if session.get("calibration_for"):
-            questions = []
+        components = [{"id": "geometry", "title": "Модель и размеры", "score": geometry, "maximum": 30,
+                       "reason": "Габариты целевых моделей прочитаны из сцены" if geometry == 30 else "Не удалось прочитать размеры всех моделей" if geometry else "Загрузите целевую модель в сцену"},
+                      {"id": "configuration", "title": "Материал и профиль", "score": configuration, "maximum": 30,
+                       "reason": "Принтер, режим, материал и совместимый профиль известны" if configuration == 30 else "Выберите принтер, режим, материал и совместимый профиль"},
+                      {"id": "requirements", "title": "Задача и условия эксплуатации", "score": requirements, "maximum": 40,
+                       "reason": "Необходимо уточнить: " + ", ".join(LABELS[k] for k in missing) if missing else "Необходимые сведения указаны пользователем"}]
+        questions = [{"field": k, "text": FIELDS[k], "label": "Уточнить " + LABELS[k]} for k in missing]
+        calibration_questions = []
         if record:
             failed = {"dimensions_check": any(abs(record[a] - 20) > TOLERANCE_MM for a in ("x_mm", "y_mm", "z_mm")),
                       "adhesion_context": not record["adhesion_ok"], "layer_context": not record["layers_ok"], "surface_context": not record["surface_ok"]}
-            questions += [{"field": k, "text": OBSERVATIONS[k], "label": "Уточнить: " + {"dimensions_check": "размеры куба", "adhesion_context": "адгезия", "layer_context": "слои", "surface_context": "поверхность"}[k]}
-                          for k in sorted(failed) if failed[k] and not known_answer(answers.get(k, ""))]
+            calibration_questions = [{"field": k, "text": OBSERVATIONS[k], "label": "Уточнить: " + {"dimensions_check": "размеры куба", "adhesion_context": "адгезия", "layer_context": "слои", "surface_context": "поверхность"}[k]}
+                          for k in sorted(failed) if failed[k] and not known_answer(observations.get(k, ""))]
         weakest = sorted(components, key=lambda c: (c["score"] / c["maximum"], c["id"]))
         score = sum(c["score"] for c in components)
         failed_checks = []
         if record:
             failed_checks = [axis for axis in ("x_mm", "y_mm", "z_mm") if abs(record[axis] - 20) > TOLERANCE_MM]
             failed_checks += [k for k in ("adhesion_ok", "layers_ok", "surface_ok") if not record[k]]
-        return {"version": VERSION, "score": score, "threshold": session.get("assessment_threshold", THRESHOLD), "components": components,
+        status = "conflict" if data_conflicts else "needs_data" if score < 100 else "sufficient"
+        sources = session.get("sources", {})
+        for row in fields.values():
+            row["sources"] = sorted(set("Из ТЗ: " + session["files"].get(ref["id"], {}).get("name", "документ")
+                                        if sources.get(ref["id"], {}).get("file_id") else "Из сообщения"
+                                        for ref in row["source_refs"]))
+        return {"version": 2, "score": score, "components": components, "fields": fields, "conflicts": data_conflicts,
+                "input_revision": session["input_revision"], "session_revision": session["revision"], "status": status,
+                "status_text": "Есть противоречия в данных" if data_conflicts else "Данных достаточно для подготовки плана" if status == "sufficient" else "Нужны дополнительные данные",
                 "weakest": [c["id"] for c in weakest if c["score"] < c["maximum"]], "questions": questions,
                 "failed_checks": failed_checks,
-                "recommend_calibration": (score < session.get("assessment_threshold", THRESHOLD) or bool(failed_checks)) and calibration < 30,
-                "process_signature": process.get("signature"), "calibration": record, "answers": answers,
-                "meaning": "Эвристика полноты проверок, не вероятность качества G-code и не подтверждение прочности.",
+                "recommend_calibration": status != "sufficient" or bool(failed_checks),
+                "calibration_questions": calibration_questions,
+                "process_signature": process.get("signature") if compatible and configuration == 30 else None, "calibration": record, "answers": answers,
+                "meaning": "Полнота необходимых данных для подбора параметров. Не оценка качества печати или прочности детали.",
                 "gcode_check": "Соответствие результата текущей сцене проверяется отдельно при расчёте и экспорте."}
 
-    def save_answers(self, sid, answers, threshold=None):
+    def save_answers(self, sid, answers):
         if set(answers) - (set(FIELDS) | set(OBSERVATIONS)) or any(not isinstance(v, str) or not v.strip() or len(v) > 2000 for v in answers.values()):
             raise ApiError("Укажите условия эксплуатации текстом")
-        if threshold is not None and (isinstance(threshold, bool) or not isinstance(threshold, int) or not 1 <= threshold <= 100):
-            raise ApiError("Порог должен быть целым числом от 1 до 100")
         current = self.store.internal(sid)
-        changed = {k: v for k, v in answers.items() if current.get("assessment_answers", {}).get(k) != v}
+        changed = {k: v for k, v in answers.items() if k in FIELDS or current.get("assessment_answers", {}).get(k) != v}
         if changed:
-            self.store.message(sid, "assessment-" + uid(), "Условия эксплуатации:\n" + "\n".join(k + ": " + changed[k] for k in sorted(changed)), [], self.bridge.snapshot())
+            message, _ = self.store.message(sid, "assessment-" + uid(), "Условия эксплуатации:\n" + "\n".join(k + ": " + changed[k] for k in sorted(changed)), [], self.bridge.snapshot())
         def save(session):
             session.setdefault("assessment_answers", {}).update(answers)
-            if threshold is not None:
-                session["assessment_threshold"] = threshold
+            for field, value in changed.items():
+                if field in FIELDS:
+                    set_answer(session, field, value, message["message_id"])
         self.store.edit(sid, save)
         return self.assessment(sid)
 

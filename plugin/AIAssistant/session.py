@@ -27,7 +27,7 @@ class ApiError(Exception):
 def workspace_view(session):
     """A display projection; complete source evidence remains in the normal API and history."""
     result = {key: session[key] for key in ("id", "title", "revision", "updated_at", "workflow_state", "task", "plans", "operations", "exports", "calibration_for", "calibration_results", "calibration_process") if key in session}
-    result["files"] = {fid: {key: value for key, value in row.items() if key != "path"} for fid, row in session["files"].items()}
+    result["files"] = {fid: {key: value for key, value in row.items() if key not in ("path", "document_text")} for fid, row in session["files"].items()}
     result["messages"] = [{key: row[key] for key in ("id", "role", "text", "created_at", "file_ids", "run_id", "origin") if key in row} for row in session["messages"]]
     result["runs"] = {rid: {key: row[key] for key in ("id", "status", "created_at", "finished_at", "error") if key in row} for rid, row in session["runs"].items()}
     task = {key: value for key, value in session["task_map"].items() if key != "resources"}
@@ -36,6 +36,8 @@ def workspace_view(session):
     result["task_map"] = task
     result["events"] = [dict({key: row[key] for key in ("id", "seq", "session_id", "run_id", "created_at", "type", "operation_id", "tool", "code", "message", "phase", "request_number", "duration_ms") if key in row},
                              has_details=bool(row.get("arguments") or row.get("result"))) for row in session["events"]]
+    from .activity import conversation_timeline
+    result["timeline"] = conversation_timeline(session)
     return copy.deepcopy(result)
 
 
@@ -156,6 +158,8 @@ class SessionStore:
             if compact:
                 return workspace_view(original)
             result = copy.deepcopy(original)
+            from .activity import conversation_timeline
+            result["timeline"] = conversation_timeline(original)
             result.pop("requests")
             result.pop("workflow_requests", None)
             result.pop("action_results", None)
@@ -220,6 +224,10 @@ class SessionStore:
                 return dict(previous["result"]), []
             for file_id in file_ids:
                 self.file(session_id, file_id)
+            from .documents import MAX_TASK_TEXT, message_text, task_input
+            prospective = {"role": "user", "text": text.strip(), "file_ids": file_ids}
+            if len(task_input(s)) + len(message_text(s, prospective)) > MAX_TASK_TEXT:
+                raise ApiError("Текст задачи и документов превышает 120 000 символов. Создайте отдельный чат", 413)
             message_id = uid()
             s["input_revision"] += 1
             s["task_map"]["input_revision"] = s["input_revision"]
@@ -261,6 +269,16 @@ class SessionStore:
                            "action_results": {}, "sources": {}, "exports": []}.items():
             session.setdefault(key, value)
         session.setdefault("task_map", new_map())
+        if not session.get("data_migrated"):
+            from .task_data import FIELDS, field_for, set_answer
+            for field, value in session.get("assessment_answers", {}).items():
+                if field in FIELDS and not any(field_for(r["key"]) == field for r in session["task_map"]["requirements"]):
+                    set_answer(session, field, value, "legacy-" + session["id"] + "-" + field)
+            consent = session["task_map"].get("risk_acceptance") or {}
+            if consent.get("reason", "").endswith("согласован с рисками на шаге выбора материала"):
+                session["task_map"].pop("risk_acceptance", None)
+            session.pop("assessment_threshold", None)
+            session["data_migrated"] = True
 
     def edit(self, session_id, change):
         """Never call Qt, MCP or the provider from a change callback."""

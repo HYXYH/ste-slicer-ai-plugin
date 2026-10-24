@@ -65,15 +65,15 @@
         <textarea id="description" placeholder="Что будем печатать? Опишите назначение детали и ваши требования…" rows="3" maxlength="20000"></textarea>
         <div class="composer-toolbar">
           <button id="attach" type="button" class="button subtle" title="Выберите файлы или перетащите их в окно чата">＋ Прикрепить файлы</button>
-          <span class="formats">STL · OBJ · 3MF · JPG · PNG</span>
+          <span class="formats">STL · OBJ · 3MF · JPG · PNG · DOCX</span>
           <button id="send" type="submit" class="button primary">Отправить ↑</button>
         </div>
-        <input id="file-input" type="file" multiple accept=".stl,.obj,.3mf,.jpg,.jpeg,.png" hidden>
+        <input id="file-input" type="file" multiple accept=".stl,.obj,.3mf,.jpg,.jpeg,.png,.docx" hidden>
       </form>
       <p class="footer-note">Изменения применяются после согласования плана. Инженерные ограничения показаны в карте задачи.</p>
     </div>
     <div id="file-drop-overlay" class="file-drop-overlay" hidden>
-      <div class="file-drop-card"><strong id="file-drop-title">Отпустите файлы, чтобы прикрепить</strong><span>STL · OBJ · 3MF · JPG · PNG</span></div>
+      <div class="file-drop-card"><strong id="file-drop-title">Отпустите файлы, чтобы прикрепить</strong><span>STL · OBJ · 3MF · JPG · PNG · DOCX</span></div>
     </div>
   </main>
   <dialog id="rename-dialog">
@@ -83,6 +83,7 @@
     </form>
   </dialog>
   <dialog id="image-dialog"><button id="close-image" class="button">Закрыть</button><img id="image-preview" alt="Прикреплённое изображение"></dialog>
+  <dialog id="document-dialog"><button id="close-document" class="button">Закрыть</button><h2 id="document-title"></h2><pre id="document-preview" style="white-space:pre-wrap;max-width:800px"></pre></dialog>
   <dialog id="llm-dialog">
     <form id="llm-form"><h2>Подключение LLM</h2>
       <label for="llm-url">Base URL</label><input id="llm-url" type="url" placeholder="https://…/v1" required>

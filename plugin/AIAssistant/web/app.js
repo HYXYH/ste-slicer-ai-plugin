@@ -8,6 +8,7 @@ if (fragment.get("token")) {
 const token = sessionStorage.getItem("assistant-token") || "";
 let current = null, currentSession = null, lastRevision = -1, polling = false, renameTarget = null;
 const drafts = new Map(), busy = new Set();
+const expandedActivities = new Set();
 const STATUS = {saved:"Сохранён", queued:"В очереди", importing:"Импортируется…", imported:"В сцене", error:"Ошибка", interrupted:"Импорт прерван"};
 const TASK = {draft:"Новая задача", importing:"Загрузка моделей в сцену…", ready:"Модель и описание готовы", needs_description:"Добавьте описание задачи", needs_model:"Прикрепите модель", needs_attention:"Проверьте результат импорта"};
 
@@ -96,6 +97,21 @@ function fileCard(file, sid, removable) {
     preview.onclick = () => showImage(sid, file.id).catch(e => notice(e.message));
     actions.append(preview);
   }
+  if (file.kind === "document") {
+    card.append(node("div", "file-meta", "Текст извлечён · " + file.text_characters + " символов"));
+    const preview = node("button", "", "Посмотреть текст");
+    preview.type = "button";
+    preview.onclick = async () => {
+      try {
+        const value = await api(sessionPath(sid) + "/files/" + file.id + "/text");
+        const dialog = $("document-dialog");
+        $("document-title").textContent = value.name;
+        $("document-preview").textContent = value.text;
+        dialog.showModal();
+      } catch (error) { notice(error.message); }
+    };
+    actions.append(preview);
+  }
   if (removable) {
     const remove = node("button", "", "Убрать из сообщения"); remove.type = "button";
     remove.onclick = () => {
@@ -154,7 +170,30 @@ function renderSession(session) {
       node("p", "", "Прикрепите 3D-модель кнопкой или перетащите её в окно чата и опишите назначение детали. Модель появится в сцене STE Slicer, а описание и файлы сохранятся в этом чате."));
     area.append(empty);
   }
-  session.messages.forEach(message => {
+  (session.timeline || session.messages).forEach(message => {
+    if (message.type === "activity") {
+      const group = node("details", "workflow-card");
+      group.open = expandedActivities.has(message.id);
+      group.ontoggle = () => group.open ? expandedActivities.add(message.id) : expandedActivities.delete(message.id);
+      group.append(node("summary", "", message.summary));
+      message.operations.forEach(action => {
+        const item = node("p", "tool-event");
+        const status = {tool_finished:"готово",tool_failed:"ошибка",tool_started:"выполняется",interrupted:"прервано"}[action.status];
+        const link = node("a", "", action.command + " · " + status);
+        link.href = "#";
+        link.onclick = event => {
+          event.preventDefault();
+          const records = session.events.filter(record => [action.start_event_id, action.finish_event_id].includes(record.id));
+          $("document-title").textContent = "Подробности действия";
+          $("document-preview").textContent = JSON.stringify(records, null, 2);
+          $("document-dialog").showModal();
+        };
+        item.append(link);
+        group.append(item);
+      });
+      area.append(group);
+      return;
+    }
     const article = node("article", "message " + message.role);
     const heading = node("div", "message-heading");
     heading.append(node("span", "", message.role === "user" ? "Вы" : message.role === "assistant" ? "Ассистент" : "Система"),
@@ -254,6 +293,7 @@ document.addEventListener("dragenter", event => {
     ? "Отпустите файлы, чтобы прикрепить" : "Дождитесь завершения текущей операции";
   $("file-drop-overlay").hidden = false;
 });
+$("close-document").onclick = () => $("document-dialog").close();
 document.addEventListener("dragover", event => {
   if (!isFileDrag(event)) return;
   // Prevent the browser from navigating to the dropped file, including outside the composer.
@@ -500,30 +540,6 @@ function renderWorkflow(session, area) {
     const box = panel(result.partial ? "Сохранено частично" : "Сохранённые файлы", area);
     result.files.forEach(f => box.append(node("p", "", f.filename + " · " + f.size + " байт")));
   });
-  function eventHistory(events, title) {
-    const details = node("details", "workflow-card");
-    const operations = new Map();
-    events.filter(e => e.operation_id && e.tool).forEach(e => {
-      const key = e.operation_id, record = operations.get(key) || {}; operations.set(key, {...record,...e});
-    });
-    const errors = events.filter(e => e.type === "error").slice(-5);
-    const rejected = events.filter(e => e.type === "model_output_rejected").slice(-3);
-    if (!operations.size && !errors.length && !rejected.length) return;
-    details.append(node("summary", "", title + " · инструментов: " + operations.size));
-    operations.forEach(event => {
-      const item = node("details", "tool-event");
-      item.append(node("summary", "", (TOOL_LABEL[event.tool] || event.tool) + " · " + ({tool_started:"выполняется",tool_finished:"готово",tool_failed:"ошибка"}[event.type] || event.type)), node("pre", "", JSON.stringify({arguments:event.arguments,result:event.result,error:event.message}, null, 2))); details.append(item);
-    });
-    errors.forEach(e => details.append(node("p", "warning", new Date(e.created_at).toLocaleTimeString("ru-RU") + " · " + e.message)));
-    rejected.forEach(e => {
-      const item = node("details", "tool-event");
-      item.append(node("summary", "", "Проверка ответа LLM №" + e.request_number + " · формат не принят"), node("p", "warning", e.message));
-      details.append(item);
-    });
-    area.append(details);
-  }
-  eventHistory(currentEvents, "Действия текущего запуска");
-  eventHistory(session.events.filter(e => !currentEventIds.has(e.id)), "Предыдущие запуски");
 }
 async function waitOperation(sid, oid) {
   for (;;) {

@@ -104,6 +104,8 @@ class MissingProfileTests(unittest.TestCase):
             {"question_id": material["id"], "value": "Согласен"}]}))
         self.assertEqual(asked, ["requirements", "clarify", "material", "summary"])
         self.assertEqual(len(provider.requests), 4)
+        self.assertNotIn("risk_acceptance", session["task_map"])
+        session = self.finished(self.server.runner.answers(self.sid, {"request_id": "profile-risk", "accept_risk": {"reason": "Проверка образца"}}))
         task = session["task_map"]
         self.assertTrue(task["risk_acceptance"])
         self.assertTrue(task["readiness"]["accepted_risk_ids"])

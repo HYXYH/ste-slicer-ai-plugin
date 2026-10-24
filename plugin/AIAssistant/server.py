@@ -246,6 +246,11 @@ class Handler(BaseHTTPRequestHandler):
             return result, 201
         if len(parts) == 5 and parts[3] == "operations" and method == "GET":
             return store.operation(sid, parts[4]), 200
+        if len(parts) == 6 and parts[3] == "files" and parts[5] == "text" and method == "GET":
+            attachment = store.file(sid, parts[4])
+            if attachment["kind"] != "document":
+                raise ApiError("Текстовый просмотр доступен для DOCX", 415)
+            return {"name": attachment["name"], "text": attachment["document_text"]}, 200
         if len(parts) == 5 and parts[3] == "files" and method == "GET":
             attachment = store.file(sid, parts[4])
             if attachment["kind"] != "image":
@@ -338,9 +343,8 @@ class Handler(BaseHTTPRequestHandler):
                 from .agent.contracts import TEXT
                 from .workspace import FIELDS, OBSERVATIONS
                 body = self._json()
-                validate(body, obj({"answers": obj({k: TEXT for k in list(FIELDS) + list(OBSERVATIONS)}),
-                                    "threshold": {"type": "integer", "minimum": 1, "maximum": 100}}, []))
-                return server.workspace.save_answers(sid, body.get("answers", {}), body.get("threshold")), 200
+                validate(body, obj({"answers": obj({k: TEXT for k in list(FIELDS) + list(OBSERVATIONS)})}, ["answers"]))
+                return server.workspace.save_answers(sid, body["answers"]), 200
         if action == "calibration" and method == "POST":
             body = self._json()
             if len(parts) == 4:

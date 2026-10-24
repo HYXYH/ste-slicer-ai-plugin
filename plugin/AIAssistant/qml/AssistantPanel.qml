@@ -101,7 +101,7 @@ Rectangle {
                     Rectangle { width:7; height:7; radius:4; color:root.v.active ? "#f0b442" : "#40b987" }
                     Text { Layout.fillWidth:true; text:root.v.status || "Подключение…"; color:"#748a9c"; font.pixelSize:11; elide:Text.ElideRight }
                     Text { visible:root.v.state === "slicing"; text:root.backend && root.backend.sliceProgress >= 0 ? Math.round(root.backend.sliceProgress * 100) + "%" : "Проверка настроек…"; color:"#1683c7"; font.pixelSize:11 }
-                    AssistantButton { compact:true; text:root.assessment.score === undefined ? "Проверки…" : "Готовность " + root.assessment.score + "/100"; onClicked: { root.details=true; rightPane.contentY=assessmentCard.y; } }
+                    AssistantButton { compact:true; text:root.assessment.score === undefined ? "Данные…" : "Данные " + root.assessment.score + "/100"; onClicked: { root.details=true; rightPane.contentY=assessmentCard.y; } }
                     AssistantButton { compact:true; text:root.v.active ? "Остановить" : (root.v.calibrationFor || {}).session_id ? "Подготовить план куба" : "Повторить анализ"; enabled:!!root.v.sessionId && !root.v.busy; onClicked:root.v.active ? root.act("cancel") : root.act("analyze") }
                 }
                 ProgressBar { visible:root.v.state === "slicing"; Layout.fillWidth:true; indeterminate:!root.backend || root.backend.sliceProgress < 0; value:root.backend && root.backend.sliceProgress >= 0 ? root.backend.sliceProgress : 0 }
@@ -125,9 +125,31 @@ Rectangle {
                             model:root.v.messages || []
                             Item {
                                 width:messagesColumn.width
-                                height:bubble.height
+                                height:modelData.type === "activity" ? actionContent.height : bubble.height
+                                Column {
+                                    id:actionContent; width:parent.width; spacing:6
+                                    visible:modelData.type === "activity"
+                                    AssistantButton { text:(modelData.expanded ? "▾ " : "▸ ") + (modelData.summary || ""); compact:true; onClicked:root.backend.toggleActivity(modelData.id) }
+                                    Column {
+                                        width:parent.width; spacing:10; visible:!!modelData.expanded
+                                        Repeater {
+                                            model:modelData.operations || []
+                                            Column {
+                                                width:actionContent.width; spacing:4
+                                                Text {
+                                                    width:parent.width
+                                                    text:(modelData.status === "tool_finished" ? "✓ " : modelData.status === "tool_failed" ? "! " : modelData.status === "interrupted" ? "■ " : "• ") + modelData.command + (modelData.duration_ms === undefined || modelData.duration_ms === null ? "" : " · " + (modelData.duration_ms / 1000).toFixed(1) + " с")
+                                                    textFormat:Text.PlainText; wrapMode:Text.Wrap
+                                                    color:modelData.status === "tool_failed" ? "#af6235" : "#167db4"; font.pixelSize:11; font.underline:true
+                                                    MouseArea { anchors.fill:parent; cursorShape:Qt.PointingHandCursor; onClicked:root.backend.showAction(modelData.start_event_id || "", modelData.finish_event_id || "") }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 Rectangle {
                                     id:bubble
+                                    visible:modelData.type !== "activity"
                                     width:modelData.role === "user" ? parent.width * .87 : parent.width
                                     anchors.right:parent.right
                                     color:modelData.role === "user" ? "#dff0ff" : modelData.role === "system" ? "#eef3f7" : "white"
@@ -147,7 +169,7 @@ Rectangle {
                                                 Layout.fillWidth:true; spacing:4
                                                 Text { Layout.fillWidth:true; text:modelData.name; textFormat:Text.PlainText; elide:Text.ElideRight; color:"#167db4"; font.pixelSize:12 }
                                                 RowLayout {
-                                                    AssistantButton { compact:true; text:modelData.kind === "image" ? "Посмотреть" : modelData.status === "imported" ? "В сцене" : "Загрузить в сцену"; enabled:modelData.kind === "image" || ["saved","error","interrupted"].indexOf(modelData.status) >= 0; onClicked: modelData.kind === "image" ? root.backend.preview(modelData.id) : root.backend.importFile(modelData.id) }
+                                                    AssistantButton { compact:true; text:modelData.kind === "document" ? "Текст извлечён · Посмотреть" : modelData.kind === "image" ? "Посмотреть" : modelData.status === "imported" ? "В сцене" : "Загрузить в сцену"; enabled:modelData.kind !== "model" || ["saved","error","interrupted"].indexOf(modelData.status) >= 0; onClicked: modelData.kind === "document" ? root.backend.previewDocument(modelData.id) : modelData.kind === "image" ? root.backend.preview(modelData.id) : root.backend.importFile(modelData.id) }
                                                 }
                                             }
                                         }
@@ -195,7 +217,7 @@ Rectangle {
                         RowLayout {
                             Layout.fillWidth:true
                             AssistantButton { text:"Прикрепить"; compact:true; enabled:!root.v.busy; onClicked:root.act("attachFiles") }
-                            Text { Layout.fillWidth:true; text:"STL / OBJ / 3MF · Изображения"; color:"#9aabb8"; font.pixelSize:10; elide:Text.ElideRight }
+                            Text { Layout.fillWidth:true; text:"STL / OBJ / 3MF · Изображения · DOCX"; color:"#9aabb8"; font.pixelSize:10; elide:Text.ElideRight }
                             AssistantButton { text:"Отправить ↑"; primary:true; compact:true; enabled:!!root.v.sessionId && !root.v.busy; onClicked:root.act("send") }
                         }
                     }
@@ -216,21 +238,42 @@ Rectangle {
                     id:rightColumn
                     width:rightPane.width - 8; spacing:12
                     AssistantCard {
-                        width:parent.width; title:"Действия ассистента"
+                        id:assessmentCard
+                        width:parent.width; title:"Данные"
+                        RowLayout {
+                            Layout.fillWidth:true
+                            Text { text:root.assessment.score === undefined ? "—" : root.assessment.score + " / 100"; font.pixelSize:25; font.bold:true; color:root.assessment.status === "sufficient" ? "#13a974" : "#b17a2c" }
+                            Item { Layout.fillWidth:true }
+                        }
+                        Text { Layout.fillWidth:true; text:root.assessment.status_text || "Собираем данные…"; textFormat:Text.PlainText; wrapMode:Text.Wrap; color:"#54748d"; font.pixelSize:11 }
                         Repeater {
-                            model:root.v.tools || []
-                            RowLayout {
-                                Layout.fillWidth:true
-                                Text { text:modelData.status === "tool_finished" ? "✓" : modelData.status === "tool_failed" ? "!" : "•"; color:modelData.status === "tool_failed" ? "#d47846" : "#15b97a"; font.bold:true; font.pixelSize:15 }
-                                Text { Layout.fillWidth:true; text:modelData.name; wrapMode:Text.Wrap; color:"#536a7d"; font.pixelSize:11 }
-                                Text { text:modelData.duration; color:"#91a3b2"; font.pixelSize:10 }
+                            model:root.assessment.components || []
+                            ColumnLayout {
+                                Layout.fillWidth:true; spacing:4
+                                RowLayout { Layout.fillWidth:true; Text { Layout.fillWidth:true; text:modelData.title; color:"#536d82"; font.pixelSize:11 } Text { text:modelData.score + "/" + modelData.maximum; color:"#6f8ba1"; font.pixelSize:10 } }
+                                Rectangle { Layout.fillWidth:true; height:4; radius:2; color:"#e7eef4"; Rectangle { width:parent.width * modelData.score / modelData.maximum; height:parent.height; color:"#36a2dc"; radius:2 } }
+                                Text { Layout.fillWidth:true; text:modelData.reason; color:"#99a8b3"; wrapMode:Text.Wrap; font.pixelSize:10 }
                             }
                         }
-                        AssistantButton { Layout.fillWidth:true; text:"Новая задача"; onClicked:root.act("newChat") }
+                        Repeater {
+                            model:root.assessment.conflicts || []
+                            Text { Layout.fillWidth:true; text:modelData; textFormat:Text.PlainText; wrapMode:Text.Wrap; color:"#af6235"; font.pixelSize:11 }
+                        }
+                        Repeater {
+                            model:Object.keys(root.assessment.fields || {}).filter(function(key) { return root.assessment.fields[key].known; })
+                            Text { Layout.fillWidth:true; text:(root.assessment.fields[modelData].values || []).join("; ") + " · " + (root.assessment.fields[modelData].sources || []).join(", "); textFormat:Text.PlainText; wrapMode:Text.Wrap; color:"#7990a3"; font.pixelSize:10 }
+                        }
+                        Text { Layout.fillWidth:true; text:root.assessment.meaning || "Собираем факты для оценки…"; wrapMode:Text.Wrap; color:"#8b9dab"; font.pixelSize:10 }
+                        Repeater {
+                            model:root.assessment.questions || []
+                            AssistantButton { Layout.fillWidth:true; text:modelData.label || ({load:"Уточнить нагрузку",temperature:"Уточнить температуру",environment:"Уточнить среду"})[modelData.field]; compact:true; onClicked: { root.modal = "assessment"; assessmentField.text = modelData.field; assessmentQuestion.text = modelData.text; assessmentValue.text = ""; } }
+                        }
                     }
                     AssistantCard {
                         width:parent.width; title:"Предлагаемые параметры печати"
                         Text { visible:!(root.v.params || []).length; Layout.fillWidth:true; text:"Параметры появятся после анализа и проверки плана."; wrapMode:Text.Wrap; color:"#8b9dab"; font.pixelSize:11 }
+                        Text { visible:root.assessment.status !== "sufficient"; Layout.fillWidth:true; text:root.assessment.status === "conflict" ? "Требования противоречат друг другу. Уточните данные перед применением параметров." : "Недостаточно данных для подбора параметров. Ответьте на вопросы в чате или в карточке «Данные»."; wrapMode:Text.Wrap; color:"#af6235"; font.pixelSize:11 }
+                        Text { visible:(root.v.params || []).length > 0 && root.assessment.status !== "sufficient"; Layout.fillWidth:true; text:"Предварительные параметры"; color:"#af6235"; font.pixelSize:11; font.bold:true }
                         Repeater {
                             model:root.v.params || []
                             RowLayout {
@@ -243,36 +286,16 @@ Rectangle {
                             }
                         }
                         Text { Layout.fillWidth:true; text:"Изменения параметров задавайте в чате. Применение — после согласования плана."; color:"#8b9dab"; wrapMode:Text.Wrap; font.pixelSize:10 }
-                        AssistantButton { Layout.fillWidth:true; text:"✓  Применить и рассчитать"; primary:true; enabled:!!root.v.planId && !root.v.busy; onClicked:root.act("applyPlan") }
-                    }
-                    AssistantCard {
-                        id:assessmentCard
-                        width:parent.width; title:"Готовность к проверочной печати"
-                        RowLayout {
-                            Layout.fillWidth:true
-                            Text { text:root.assessment.score === undefined ? "—" : root.assessment.score + " / 100"; font.pixelSize:25; font.bold:true; color:(root.assessment.score || 0) >= (root.assessment.threshold || 80) && !(root.assessment.failed_checks || []).length ? "#13a974" : "#b17a2c" }
-                            Item { Layout.fillWidth:true }
-                            Text { text:"Порог"; color:"#899cac"; font.pixelSize:10 }
-                            SpinBox { Layout.preferredWidth:88; from:1; to:100; value:root.assessment.threshold || 80; editable:true; font.pixelSize:11; onValueModified:root.backend.setThreshold(value) }
-                        }
-                        Repeater {
-                            model:root.assessment.components || []
-                            ColumnLayout {
-                                Layout.fillWidth:true; spacing:4
-                                RowLayout { Layout.fillWidth:true; Text { Layout.fillWidth:true; text:modelData.title; color:"#536d82"; font.pixelSize:11 } Text { text:modelData.score + "/" + modelData.maximum; color:"#6f8ba1"; font.pixelSize:10 } }
-                                Rectangle { Layout.fillWidth:true; height:4; radius:2; color:"#e7eef4"; Rectangle { width:parent.width * modelData.score / modelData.maximum; height:parent.height; color:"#36a2dc"; radius:2 } }
-                                Text { Layout.fillWidth:true; text:modelData.reason; color:"#99a8b3"; wrapMode:Text.Wrap; font.pixelSize:10 }
-                            }
-                        }
-                        Text { Layout.fillWidth:true; text:root.assessment.meaning || "Собираем факты для оценки…"; wrapMode:Text.Wrap; color:"#8b9dab"; font.pixelSize:10 }
-                        Text { visible:(root.assessment.failed_checks || []).length > 0; width:parent.width; text:"Куб не прошёл часть проверок. Высокая сумма баллов не отменяет выявленные дефекты."; color:"#af6235"; wrapMode:Text.Wrap; font.pixelSize:11 }
-                        Repeater {
-                            model:root.assessment.questions || []
-                            AssistantButton { Layout.fillWidth:true; text:modelData.label || ({load:"Уточнить нагрузку",temperature:"Уточнить температуру",environment:"Уточнить среду"})[modelData.field]; compact:true; onClicked: { root.modal = "assessment"; assessmentField.text = modelData.field; assessmentQuestion.text = modelData.text; assessmentValue.text = ""; } }
-                        }
-                        AssistantButton { visible:root.assessment.recommend_calibration === true; Layout.fillWidth:true; text:"Подготовить куб 20 мм"; primary:true; enabled:!!root.assessment.process_signature; onClicked:root.modal = "calibration" }
+                        AssistantButton { Layout.fillWidth:true; text:"✓  Применить и рассчитать"; primary:true; enabled:!!root.v.planId && !root.v.busy && root.assessment.status !== "conflict"; onClicked:root.act("applyPlan") }
+                        AssistantButton { visible:root.assessment.recommend_calibration === true; Layout.fillWidth:true; text:"Провести калибровку"; primary:true; enabled:!!root.assessment.process_signature; onClicked:root.modal = "calibration" }
                         AssistantButton { visible:!!(root.v.calibrationFor || {}).session_id; Layout.fillWidth:true; text:"Ввести измерения куба"; onClicked:root.modal = "measurements" }
                         AssistantButton { visible:!!(root.v.calibrationFor || {}).session_id; Layout.fillWidth:true; text:"Вернуться к детали"; compact:true; onClicked:root.backend.select(root.v.calibrationFor.session_id) }
+                        Text { visible:root.assessment.recommend_calibration === true; Layout.fillWidth:true; text:root.assessment.process_signature ? "Куб 20 мм проверяет размеры и качество печати. Условия эксплуатации и противоречия ТЗ нужно уточнить отдельно." : "Для калибровки выберите принтер, материал и совместимый профиль."; wrapMode:Text.Wrap; color:"#8b9dab"; font.pixelSize:10 }
+                        Text { visible:(root.assessment.failed_checks || []).length > 0; Layout.fillWidth:true; text:"Куб не прошёл часть проверок. Проверьте измерения и дефекты перед повторной печатью."; wrapMode:Text.Wrap; color:"#af6235"; font.pixelSize:11 }
+                        Repeater {
+                            model:root.assessment.calibration_questions || []
+                            AssistantButton { Layout.fillWidth:true; text:modelData.label; compact:true; onClicked: { root.modal="assessment"; assessmentField.text=modelData.field; assessmentQuestion.text=modelData.text; assessmentValue.text=""; } }
+                        }
                     }
                 }
             }

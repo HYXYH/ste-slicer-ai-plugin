@@ -5,6 +5,7 @@ import hashlib
 import json
 
 from ..session import ApiError
+from ..documents import message_text
 from .contracts import fail, strict_json, validate, obj, array
 from .output_contract import validation_reason
 from .prompts import STEP_SYSTEM, STEP_REQUIREMENTS, STEP_CLARIFY, STEP_MATERIAL, STEP_SUMMARY
@@ -23,6 +24,7 @@ GLOBAL_KEYS = ("layer_height", "support_enable", "material_bed_temperature")
 SHORT = {"type": "string", "minLength": 1, "maxLength": 200}
 UNIT = {"type": "string", "maxLength": 20}
 REQUIREMENTS_SCHEMA = obj({"requirements": array(obj({"key": SHORT, "value": SHORT, "unit": UNIT,
+                                                      "status": {"enum": ["known", "unknown", "conflict", "not_applicable"]},
                                                       "strength": {"type": "string", "enum": ["hard", "preference"]}},
                                                      ["key", "value", "unit", "strength"]), 12, 1),
                            "summary": {"type": "string", "minLength": 1, "maxLength": 400}}, ["requirements", "summary"])
@@ -84,7 +86,7 @@ class Steps:
         for message in [m for m in session["messages"] if m["role"] == "user"]:
             payload = payloads.get(message["id"])
             if payload is None:
-                text = message.get("text") or ""
+                text = message_text(session, message)
             else:
                 text = [payload.get("text", "")]
                 for answer in payload.get("answers", []):
@@ -101,6 +103,7 @@ class Steps:
                 parts.append(text)
                 if message["id"] in session["sources"]:
                     refs.append(message["id"])
+                refs.extend(fid for fid in message.get("file_ids", []) if fid in session["sources"])
         return "\n".join(p for p in parts if p), refs
 
     def advance(self, session, configuration, catalog=()):
@@ -122,6 +125,7 @@ class Steps:
         # Step 1-2: requirements and clarifying questions, confirmed by the user.
         requirements = state.get("requirements")
         if not requirements or requirements["key"] != key:
+            task.pop("risk_acceptance", None)
             self.progress("Шаг 1 из 4: выделяю требования из задачи")
             result = self.ask(STEP_REQUIREMENTS, {"task": brief}, REQUIREMENTS_SCHEMA, "step_requirements")
             if result is None:
@@ -143,7 +147,7 @@ class Steps:
                                     "source": [{"id": answer["message_id"], "version": session["sources"][answer["message_id"]]["version"]}]})
                 answer_lines.append(question["text"] + " " + answer["value"])
         targets = task["target_object_ids"]
-        task["requirements"] = [{"id": r["id"], "key": r["key"], "value": r["value"], "unit": r["unit"] or None, "status": "known",
+        task["requirements"] = [{"id": r["id"], "key": r["key"], "value": r["value"], "unit": r["unit"] or None, "status": r.get("status", "known"),
                                  "strength": r["strength"], "source_refs": r.get("source") or user_refs, "object_ids": targets, "supersedes": None}
                                 for r in requirements["rows"] + answer_rows]
         if answered.get(confirm_id, {}).get("value") != CONFIRM:
@@ -190,10 +194,7 @@ class Steps:
         if answer:
             chosen = material["record_id"] if answer["value"] == AGREE else material["options"].get(answer["value"])
         if chosen is None:
-            hard = any(r["strength"] == "hard" for r in task["requirements"])
-            task["questions"].append(self.question(material_id, "confirm_material", "Согласны с выбором материала?" + (
-                " Непроверенные обязательные требования останутся рисками прототипа." if hard else "") +
-                " Агент сам выберет этот материал в слайсере.",
+            task["questions"].append(self.question(material_id, "confirm_material", "Согласны с выбором материала?",
                 "Материал определяет температуры и прочность детали", options, False))
             if record:
                 lines = ["Предлагаю материал {} ({}).".format(short_title(record), proposed["material"]["basis"]),
@@ -206,10 +207,9 @@ class Steps:
 
         # Step 4: settings come from the reference base for the confirmed material; the model summarises.
         record = records[chosen]
-        if not task.get("risk_acceptance") and any(r["strength"] == "hard" for r in task["requirements"]):
-            # The material question names this consequence, so agreeing is the explicit prototype consent.
-            task["risk_acceptance"] = {"message_id": answer["message_id"],
-                                       "reason": "Материал {} согласован с рисками на шаге выбора материала".format(short_title(record))}
+        # Historical behavior, superseded by a separate explicit risk confirmation:
+        # The material question names this consequence, so agreeing is the explicit prototype consent.
+        # Material consent now authorizes only the material; Runner.answers owns risk acceptance.
         final = recommend(text, context, record["material_ids"][0], confirmed=True)
         task["recommended_settings"] = final
         extruders = context.get("extruders") or []
@@ -254,8 +254,11 @@ class Steps:
                     "limitations": limitations, "source_refs": config_refs}
         task["candidates"], task["decision_proposals"] = [candidate], [decision]
         text = summary["summary"] if summary else "Материал {}. Настройки рассчитаны по справочнику под требования задачи.".format(short_title(record))
-        text += ("\n\nДальше: нажмите «Согласовать, применить и рассчитать» в плане печати — настройки применятся "
-                 "и слайсер нарежет модель. Затем «Выбрать папку и сохранить» запишет result.gcode и project.3mf.")
+        if not task.get("risk_acceptance") and any(check["status"] != "pass" for check in checks):
+            text += "\n\nОбязательные требования пока не подтверждены. Укажите результаты проверки или отдельно примите риск подготовки прототипа."
+        else:
+            text += ("\n\nДальше: нажмите «Согласовать, применить и рассчитать» в плане печати — настройки применятся "
+                     "и слайсер нарежет модель. Затем «Выбрать папку и сохранить» запишет result.gcode и project.3mf.")
         return task, {"summary": text, "decision_proposals": [decision]}
 
     @staticmethod

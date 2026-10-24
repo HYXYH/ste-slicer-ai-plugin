@@ -511,7 +511,7 @@ class AssistantWindow(QWidget):
         self.client.call(self.path(sid) + "/messages", success, "POST", body, failed)
 
     def attach_files(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Прикрепить модели и изображения", "", "Модели и изображения (*.stl *.obj *.3mf *.jpg *.jpeg *.png)")
+        paths, _ = QFileDialog.getOpenFileNames(self, "Прикрепить модель, изображение или ТЗ", "", "Модели, изображения и ТЗ (*.stl *.obj *.3mf *.jpg *.jpeg *.png *.docx)")
         self.upload(paths)
 
     def upload(self, paths):
@@ -603,7 +603,9 @@ class AssistantWindow(QWidget):
             if ok and value.strip():
                 self.answer(sid, {"accept_risk": {"reason": value}})
         elif kind == "history":
-            self.history = not self.history
+            if not isinstance(self.history, set):
+                self.history = set()
+            self.history.symmetric_difference_update([action["group_id"]])
             self.chat.set_document(session_document(self.session, self.history))
         elif kind == "approve":
             self.approve(sid, action)
@@ -613,6 +615,32 @@ class AssistantWindow(QWidget):
             self.send(sid=sid, files=[action["file_id"]])
         elif kind == "image":
             self.client.call(self.path(sid) + "/files/" + action["file_id"], self.show_image, binary=True)
+        elif kind == "document":
+            self.client.call(self.path(sid) + "/files/" + action["file_id"] + "/text",
+                             lambda value: self.show_text(value["name"], value["text"]))
+        elif kind == "action":
+            ids, records = list(dict.fromkeys(eid for eid in (action["start_id"], action["finish_id"]) if eid)), []
+            def load_next():
+                if not ids:
+                    self.show_text("Подробности команды", json.dumps(records, ensure_ascii=False, indent=2))
+                    return
+                self.client.call(self.path(sid) + "/events/" + ids.pop(0), loaded)
+            def loaded(record):
+                records.append(record)
+                load_next()
+            load_next()
+
+    def show_text(self, title, text):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(800, 600)
+        layout = QVBoxLayout(dialog)
+        view = QPlainTextEdit()
+        view.setReadOnly(True)
+        view.setPlainText(text)
+        layout.addWidget(view)
+        layout.addWidget(button("Закрыть", dialog.accept))
+        dialog.exec_()
 
     def approve(self, sid, action):
         path = self.path(sid) + "/plans/" + action["plan_id"]

@@ -6,6 +6,8 @@ import threading
 import time
 
 from ..session import ApiError, uid, now
+from ..documents import task_input
+from ..task_data import field_for, set_answer, reconcile_answers
 from .contracts import strict_json, fail, validate, obj, ID, TEXT, array
 from .llm_client import LLMClient, image_content, endpoint, HTTP_TIMEOUT
 from .mcp_client import MCPClient
@@ -29,7 +31,7 @@ STEP_NAMES = {"requirements": "Подтвердите, что требовани
 
 
 def task_text(session):
-    return "\n".join([session["task"].get("description") or ""] + [m.get("text") or "" for m in session["messages"] if m["role"] == "user"])
+    return "\n".join([session["task"].get("description") or "", task_input(session)])
 
 
 class Runner:
@@ -183,7 +185,7 @@ class Runner:
             configuration = tool("get_current_configuration", {})
             if scene["snapshot_ref"] != configuration["snapshot_ref"]:
                 fail("Сцена изменилась между чтениями", "STALE_INPUT", 409)
-            knowledge = tool("search_knowledge", {"query": session["task"]["description"] or "подготовка печати", "limit": 50})
+            knowledge = tool("search_knowledge", {"query": task_text(session)[:20000] or "подготовка печати", "limit": 50})
             materials = tool("list_materials", {"limit": 50})
             profiles = tool("find_compatible_profiles", {"limit": 50})
             def observed(s):
@@ -199,6 +201,11 @@ class Runner:
                 for m in s["messages"]:
                     if m["role"] == "user":
                         s["sources"][m["id"]] = {"id": m["id"], "version": 1, "kind": "user", "text": m["text"]}
+                        for fid in m.get("file_ids", []):
+                            f = s["files"].get(fid, {})
+                            if f.get("kind") == "document":
+                                s["sources"][fid] = {"id": fid, "version": 1, "kind": "user", "file_id": fid,
+                                                      "message_id": m["id"], "text": f["document_text"]}
             self.store.edit(sid, observed)
             session = self.store.internal(sid)
             def rejected(error, phase):
@@ -334,6 +341,7 @@ class Runner:
                             messages.append({"role": "user", "content": "Исправь JSON по контракту. Ошибка: " + last_validation})
             check()
             current_scene = tool("get_scene_snapshot", {}, fresh=True)["data"]
+            reconcile_answers(updated, self.store.internal(sid)["sources"])
             resolve_tool_unknowns(updated, self.store.internal(sid)["sources"], current_scene["snapshot_ref"])
             select_default_candidate(updated, ((configuration["data"].get("context") or {}).get("mode") or {}).get("id"))
             updated["readiness"] = readiness(updated, current_scene, latest["sources"])
@@ -426,6 +434,9 @@ class Runner:
                 if not question:
                     fail("Вопрос не найден", "OBJECT_NOT_FOUND", 404)
                 question["answer"] = dict(answer, message_id=message_id)
+                field = field_for(question["field"])
+                if field:
+                    set_answer(session, field, answer["value"], message_id)
                 texts.append(question["text"] + " " + answer["value"])
                 if answer["value"].strip().lower() not in ("не знаю", "unknown"):
                     for unknown in task["unknowns"]:

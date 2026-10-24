@@ -55,10 +55,11 @@ class WorkspaceTests(unittest.TestCase):
         first = self.server.workspace.assessment(self.sid)
         self.store.edit(self.sid, lambda s: s["messages"].append({"id": "fake", "role": "assistant", "text": "Уверенность 99%", "file_ids": []}))
         second = self.server.workspace.assessment(self.sid)
-        self.assertEqual(first, second)
+        self.assertEqual({k: v for k, v in first.items() if k != "session_revision"}, {k: v for k, v in second.items() if k != "session_revision"})
         self.assertTrue(first["recommend_calibration"])
         self.assertEqual(sum(c["score"] for c in first["components"]), first["score"])
-        self.server.workspace.save_answers(self.sid, {"load": "не применяется", "temperature": "20 °C", "environment": "помещение"}, 1)
+        self.server.workspace.save_answers(self.sid, {"load": "не применяется", "temperature": "20 °C", "environment": "помещение"})
+        self.assertEqual(self.api("PATCH", "/api/sessions/" + self.sid + "/assessment", {"threshold": 1})[0], 400)
         result = self.store.get(self.sid)
         self.assertEqual(result["plans"], {})
         self.assertIn("Условия эксплуатации", result["task"]["description"])
@@ -77,12 +78,16 @@ class WorkspaceTests(unittest.TestCase):
         with self.assertRaises(ApiError):
             self.server.workspace.record_calibration(child["id"], body)
         self.store.edit(child["id"], lambda s: (s["operations"].update({"slice":{"kind":"slice","status":"completed","plan_id":"plan"}}), s["plans"].update({"plan":{"status":"applied"}})))
+        before = self.server.workspace.assessment(self.sid)["score"]
         self.server.workspace.record_calibration(child["id"], body)
         a = self.server.workspace.assessment(self.sid)
-        self.assertEqual(next(c for c in a["components"] if c["id"] == "calibration")["score"], 30)
+        self.assertEqual(a["score"], before)
+        self.assertEqual(a["calibration"]["x_mm"], 20.)
+        self.assertNotIn("calibration", [c["id"] for c in a["components"]])
         self.process_signature = "different-settings"
         b = self.server.workspace.assessment(self.sid)
-        self.assertEqual(next(c for c in b["components"] if c["id"] == "calibration")["score"], 0)
+        self.assertIsNone(b["calibration"])
+        self.assertEqual(b["score"], before)
         with self.assertRaises(ApiError) as caught:
             self.server.workspace.record_calibration(child["id"], body)
         self.assertEqual(caught.exception.code, "STALE_INPUT")
@@ -104,16 +109,18 @@ class WorkspaceTests(unittest.TestCase):
         self.store.edit(child["id"], lambda s: (s["operations"].update({"slice":{"kind":"slice","status":"completed","plan_id":"p"}}), s["plans"].update({"p":{"status":"applied"}})))
         self.server.workspace.record_calibration(child["id"], {"x_mm":20.8,"y_mm":20.,"z_mm":20.,"adhesion_ok":False,"layers_ok":True,"surface_ok":False,"printed":True,"process_signature":"process-1"})
         a = self.server.workspace.assessment(self.sid)
-        fields = [q["field"] for q in a["questions"]]
+        fields = [q["field"] for q in a["calibration_questions"]]
         self.assertIn("x_mm", a["failed_checks"])
         self.assertTrue(a["recommend_calibration"])
         self.assertIn("dimensions_check", fields)
         self.assertIn("adhesion_context", fields)
         self.assertIn("surface_context", fields)
         self.assertNotIn("layer_context", fields)
-        before = next(c["score"] for c in a["components"] if c["id"] == "calibration")
+        before = a["score"]
         b = self.server.workspace.save_answers(self.sid, {"adhesion_context":"Отрыв по углам"})
-        self.assertEqual(next(c["score"] for c in b["components"] if c["id"] == "calibration"), before)
+        self.assertEqual(b["score"], before)
+        self.assertEqual(b["failed_checks"], a["failed_checks"])
+        self.assertNotIn("adhesion_context", [q["field"] for q in b["calibration_questions"]])
 
     def test_failed_file_copy_does_not_publish_or_erase_a_chat(self):
         receive(self.store, self.sid, "original.stl", io.BytesIO(STL), len(STL))

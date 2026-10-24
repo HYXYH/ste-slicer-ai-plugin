@@ -21,8 +21,8 @@ Stage предоставляет `stageId`, `mainComponent`, `sidebarComponent`,
 | Метод и путь | Тело | Результат |
 | --- | --- | --- |
 | POST `/api/sessions/merge` | request_id, session_ids (2–10 уникальных ID), title | Новый чат с копиями сообщений и файлов; исходные чаты сохранены, согласия и планы отсутствуют |
-| GET `/api/sessions/{sid}/assessment` | Нет | version, score, threshold, components, weakest, questions, calibration, process_signature, meaning |
-| PATCH `/api/sessions/{sid}/assessment` | answers?, threshold? (1–100) | Пересчитанная оценка; ответы добавлены в пользовательскую историю и требуют нового анализа плана |
+| GET `/api/sessions/{sid}/assessment` | Нет | version=2, score, components (30/30/40), fields с источниками, conflicts, status, status_text, weakest, questions, calibration, calibration_questions, process_signature, meaning |
+| PATCH `/api/sessions/{sid}/assessment` | answers | Пересчитанная полнота данных; ответы добавлены в пользовательскую историю и общую карту требований. Порог не поддерживается |
 | POST `/api/sessions/{sid}/calibration` | request_id | Новая задача с кубом 20 мм и ссылкой calibration_for на исходную |
 | POST `/api/sessions/{sid}/calibration/plan` | request_id | Проверенный план без изменения параметров; импорт куба и отсутствие чужих моделей обязательны |
 | POST `/api/sessions/{sid}/calibration/result` | x_mm, y_mm, z_mm, adhesion_ok, layers_ok, surface_ok, printed=true, process_signature | Сохранённая запись измерений после расчёта куба |

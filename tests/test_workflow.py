@@ -412,6 +412,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(material["options"][0]["label"], "Согласен")
         session = self.finished(self.server.runner.answers(self.sid, {"request_id": "a3", "answers": [{"question_id": material["id"], "value": "Согласен"}]}))
         self.assertEqual(asked, ["requirements", "clarify", "material", "summary"])
+        self.assertEqual(session["workflow_state"], "waiting_user")
+        self.assertNotIn("risk_acceptance", session["task_map"])
+        self.assertEqual(session["plans"], {})
+        session = self.finished(self.server.runner.answers(self.sid, {"request_id": "a4", "accept_risk": {"reason": "Проверка посадки прототипа"}}))
         self.assertEqual(session["workflow_state"], "plan_ready", session["events"][-1])
         plan = next(iter(session["plans"].values()))
         changes = {c["key"]: c for c in plan["actions"][0]["arguments"]["changes"]}
@@ -421,6 +425,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("cool_fan_speed", changes)
         self.assertTrue(any("cool_fan_speed" in l for l in plan["limitations"]))
         # Agreeing with the material accepts the unproven hard requirement as a prototype risk.
+        # That legacy behavior is now deliberately split: only the separate a4 answer accepts risk.
         self.assertEqual(session["task_map"]["readiness"]["accepted_risk_ids"], [r["id"] for r in session["task_map"]["requirements"] if r["key"] == "load"])
         self.assertIn("result.gcode", session["messages"][-1]["text"])
         self.assertEqual(self.bridge.mutations, [])
@@ -460,6 +465,9 @@ class WorkflowTests(unittest.TestCase):
         # The slicer held material-1: agreeing lets the agent select Enduse PETG itself and finish the plan.
         self.assertEqual(self.bridge.mutations, ["select_material"])
         self.assertEqual(self.bridge.context["extruders"][0]["material"]["id"], "enduse_petg")
+        self.assertEqual(session["workflow_state"], "waiting_user")
+        self.assertNotIn("risk_acceptance", session["task_map"])
+        session = self.finished(self.server.runner.answers(self.sid, {"request_id": "b4", "accept_risk": {"reason": "Проверка геометрии прототипа"}}))
         self.assertEqual(session["workflow_state"], "plan_ready", session["events"][-1])
         self.assertEqual(next(iter(session["plans"].values()))["selected"]["material_id"], "enduse_petg")
         self.assertEqual(session["task_map"]["recommended_settings"]["material"]["basis"], "подтверждён пользователем")

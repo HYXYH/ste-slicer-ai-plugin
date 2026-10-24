@@ -46,8 +46,12 @@ def analysis_context(session, current_data):
                 selected.add(row["id"])
                 current_refs.add(row["id"])
     messages = [m for m in session["messages"] if m["role"] == "user"][-20:]
+    documents = [{"id": fid, "name": session["files"][fid]["name"], "text": session["files"][fid]["document_text"]}
+                 for fid in dict.fromkeys(fid for m in session["messages"] if m["role"] == "user" for fid in m.get("file_ids", []))
+                 if session["files"].get(fid, {}).get("kind") == "document"]
     message_ids = set(m["id"] for m in messages)
     selected.update(message_ids & set(sources))
+    selected.update(d["id"] for d in documents if d["id"] in sources)
     index = {}
     for sid in sorted(selected):
         source = sources.get(sid)
@@ -60,13 +64,15 @@ def analysis_context(session, current_data):
         elif source.get("kind") == "knowledge" and sid not in current_refs:
             row["data"] = copy.deepcopy(source.get("data"))
         if source.get("kind") == "user":
-            if sid in message_ids:
+            if source.get("file_id"):
+                row["details_in"] = "documents"
+            elif sid in message_ids:
                 row["details_in"] = "user_messages"
             else:
                 # Keep older user evidence when active requirements still cite it.
                 row["text"] = source.get("text", "")
         index[sid] = row
-    return {"task_map": task, "sources": index, "current_data": data,
+    return {"task_map": task, "sources": index, "current_data": data, "documents": documents,
             "context_notes": ["Полная история и ответы инструментов сохранены на сервере.",
                               "sources — индекс источников; актуальные измерения находятся в current_data.",
                               "Исторические измерения не подтверждают текущую сцену. Запросите недостающие данные инструментами.",

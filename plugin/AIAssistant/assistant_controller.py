@@ -31,6 +31,7 @@ class AssistantController(QObject):
         self.drafts, self.busy, self.pending = {}, set(), set()
         self.message, self.prompt, self.actions = "", None, {}
         self.history, self.analytics_mode, self.disposed = False, False, False
+        self.expanded_activity = set()
         self.days, self.last_report, self.last_assessment = 30, 0, 0
         self._slice_progress, self._document_key, self._document = -1., None, ("", {})
         self.timer = QTimer(self)
@@ -115,6 +116,8 @@ class AssistantController(QObject):
         self.session = session
         if same_revision:
             return
+        if session.get("workflow_state") not in ("applying", "slicing", "exporting", "waiting_import"):
+            self.last_assessment = 0
         d = self.draft_for(self.current)
         if not d["initialized"]:
             used = set(fid for m in session["messages"] for fid in m.get("file_ids", []))
@@ -156,6 +159,9 @@ class AssistantController(QObject):
 
     def receive_assessment(self, sid, value):
         if self.current == sid:
+            if self.session and value.get("session_revision", 0) < self.session["revision"]:
+                self.last_assessment = 0
+                return
             self.assessment = value
             self.last_assessment = time.monotonic()
             self.update_buttons()
@@ -164,8 +170,9 @@ class AssistantController(QObject):
         session = self.session or {}
         task = session.get("task_map") or {}
         messages = []
-        for old in session.get("messages", []):
-            row = {k: old.get(k, "") for k in ("id", "role", "text", "created_at")}
+        for old in session.get("timeline", session.get("messages", [])):
+            row = dict(old)
+            row["expanded"] = (session.get("id"), old.get("id")) in self.expanded_activity
             row["files"] = [session["files"][fid] for fid in old.get("file_ids", []) if fid in session["files"]]
             messages.append(row)
         document_key = (session.get("id"), session.get("revision"), self.history)
@@ -187,13 +194,7 @@ class AssistantController(QObject):
             for action in plan["actions"]:
                 if action["tool"] == "set_settings":
                     params.extend({"name": PARAMETERS.get(c["key"], c["key"]), "value": human(c["value"]) + (" " + SETTINGS[c["key"]][1] if c["key"] in SETTINGS and SETTINGS[c["key"]][1] else "")} for c in action["arguments"]["changes"])
-        events, tools = session.get("events", []), {}
         runs = session.get("runs", {})
-        latest = max(runs.values(), key=lambda r: r.get("created_at", "")) if runs else None
-        for e in events:
-            if e.get("tool") and e.get("operation_id") and (not latest or e.get("run_id") == latest["id"] or e.get("run_id") not in runs and e["created_at"] >= latest["created_at"]):
-                tools[e["operation_id"]] = {"name": TOOLS.get(e["tool"], e["tool"]), "status": e["type"],
-                                             "duration": "—" if e.get("duration_ms") is None else str(round(e["duration_ms"] / 1000, 1)) + " с"}
         state = session.get("workflow_state", "idle")
         step = 0 if not messages else 1 if state in ("idle", "analyzing", "waiting_user", "queued", "failed") else 2 if state == "plan_ready" else 3 if state in ("applying", "slicing", "result_ready") else 4
         report, self.analytics_actions = analytics_document(self.report, self.report_search, self.report_filter) if self.report else ("", {})
@@ -201,7 +202,7 @@ class AssistantController(QObject):
                       "messages": messages, "workflow": workflow, "status": FLOW.get(state, state), "state": state, "step": step,
                       "busy": self.current in self.busy, "active": any(r["status"] in ("queued", "running") for r in runs.values()),
                       "pending": [session["files"][fid] for fid in self.draft_for(self.current)["files"] if fid in session.get("files", {})] if self.current else [],
-                      "notice": self.message, "context": {k: v for k, v in self.context.items() if k != "updated_at"}, "tools": list(tools.values())[-6:], "params": params,
+                      "notice": self.message, "context": {k: v for k, v in self.context.items() if k != "updated_at"}, "params": params,
                       "planId": actionable_plan["id"] if actionable_plan else "", "planVersion": actionable_plan["version"] if actionable_plan else 0,
                       "assessment": self.assessment, "analytics": self.analytics_mode, "report": report,
                       "calibrationFor": session.get("calibration_for", {}), "config": self.config, "configVersion": self.config_version, "prompt": self.prompt or {}}
@@ -256,7 +257,7 @@ class AssistantController(QObject):
 
     @pyqtSlot()
     def attachFiles(self):
-        paths, _ = QFileDialog.getOpenFileNames(None, "Прикрепить модели и изображения", "", "Модели и изображения (*.stl *.obj *.3mf *.jpg *.jpeg *.png)")
+        paths, _ = QFileDialog.getOpenFileNames(None, "Прикрепить модель, изображение или ТЗ", "", "Модели, изображения и ТЗ (*.stl *.obj *.3mf *.jpg *.jpeg *.png *.docx)")
         self.upload(paths)
 
     @pyqtSlot('QVariantList')
@@ -349,6 +350,10 @@ class AssistantController(QObject):
             self.update_buttons()
         elif kind == "image":
             self.preview(a["file_id"])
+        elif kind == "document":
+            self.previewDocument(a["file_id"])
+        elif kind == "action":
+            self.showAction(a["start_id"], a["finish_id"])
         elif kind == "import":
             self.importFile(a["file_id"])
         elif kind == "event":
@@ -501,12 +506,54 @@ class AssistantController(QObject):
     @pyqtSlot(str, str)
     def answerAssessment(self, field, value):
         sid = self.current
-        self.client.call(self.path() + "/assessment", lambda result: (self.receive_assessment(sid, result), self.poll()), "PATCH", {"answers": {field: value}})
+        def saved(result):
+            self.receive_assessment(sid, result)
+            self.poll()
+            if self.config.get("key_configured") and not (self.session or {}).get("calibration_for"):
+                self.client.call(self.path(sid) + "/runs", lambda result: self.poll(), "POST", {"request_id": request_id()})
+        self.client.call(self.path() + "/assessment", saved, "PATCH", {"answers": {field: value}})
 
-    @pyqtSlot(int)
-    def setThreshold(self, value):
-        sid = self.current
-        self.client.call(self.path() + "/assessment", lambda result: self.receive_assessment(sid, result), "PATCH", {"threshold": value})
+    @pyqtSlot(str)
+    def toggleActivity(self, group_id):
+        key = (self.current, group_id)
+        if key in self.expanded_activity:
+            self.expanded_activity.remove(key)
+        else:
+            self.expanded_activity.add(key)
+        self.update_buttons()
+
+    def showText(self, title, text):
+        dialog = QDialog()
+        dialog.setWindowTitle(title)
+        dialog.resize(800, 600)
+        layout = QVBoxLayout(dialog)
+        details = QPlainTextEdit()
+        details.setReadOnly(True)
+        details.setPlainText(text)
+        layout.addWidget(details)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec_()
+
+    @pyqtSlot(str)
+    def previewDocument(self, fid):
+        self.client.call(self.path() + "/files/" + quote(fid, safe="") + "/text",
+                         lambda value: self.showText(value["name"] + " — извлечённый текст", value["text"]))
+
+    @pyqtSlot(str, str)
+    def showAction(self, start_id, finish_id):
+        ids = list(dict.fromkeys(eid for eid in (start_id, finish_id) if eid))
+        sid, result = self.current, []
+        def next_event():
+            if not ids:
+                self.showText("Подробности действия — AI Assistant", json.dumps(result, ensure_ascii=False, indent=2))
+                return
+            self.client.call(self.path(sid) + "/events/" + quote(ids.pop(0), safe=""), received)
+        def received(event):
+            result.append(event)
+            next_event()
+        next_event()
 
     @pyqtSlot()
     def createCalibration(self):

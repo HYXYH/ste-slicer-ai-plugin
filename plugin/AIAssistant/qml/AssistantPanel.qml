@@ -58,7 +58,7 @@ Rectangle {
                 Layout.fillWidth: true
                 spacing: 3
                 Text { text: root.v.chats ? "Все чаты" : root.v.analytics ? "Аналитика подготовки" : "AI Print Assistant"; color: "#123858"; font.family: "Segoe UI"; font.pixelSize: root.v.chats ? 30 : 20; font.bold: true }
-                Text { visible:!root.v.chats; Layout.fillWidth: true; text: root.v.title || "Опишите задачу — ассистент подберёт параметры печати"; color: "#7d8e9f"; font.pixelSize: 11; elide: Text.ElideRight }
+                Text { visible:!root.v.chats && !root.v.analytics; Layout.fillWidth: true; text: root.v.title || "Опишите задачу — ассистент подберёт параметры печати"; color: "#7d8e9f"; font.pixelSize: 11; elide: Text.ElideRight }
             }
             AssistantButton { visible: root.width < 850 && !root.v.analytics && !root.v.chats; text: root.details ? "Чат" : "Параметры"; onClicked: root.details = !root.details }
         }
@@ -342,25 +342,9 @@ Rectangle {
             backend:root.backend; sessions:root.v.sessions || []; currentId:root.v.sessionId || ""
             onDeleteRequested: { root.deleteChatId=sessionId; root.deleteChatTitle=title; root.modal="deleteChat"; }
         }
-        ColumnLayout {
-            visible:!!root.v.analytics
-            anchors.fill:parent; spacing:10
-            RowLayout {
-                Layout.fillWidth:true
-                ComboBox { id:reportDays; model:["7 дней","30 дней","Всё время"]; currentIndex:1; onActivated:root.backend.loadAnalytics([7,30,0][currentIndex]) }
-                TextField { Layout.fillWidth:true; placeholderText:"Найти задачу…"; onTextChanged:if(root.backend) root.backend.searchAnalytics(text) }
-                ComboBox { model:["Все задачи","Нужны действия","Актуальный G-code","Есть файлы"]; onActivated:root.backend.filterAnalytics(["all","attention","ready","saved"][currentIndex]) }
-                AssistantButton { text:"Обновить"; onClicked:root.backend.loadAnalytics([7,30,0][reportDays.currentIndex]) }
-                AssistantButton { text:"Сохранить CSV"; onClicked:root.act("exportCsv") }
-            }
-            Flickable {
-                id:analyticsScroll
-                Layout.fillWidth:true; Layout.fillHeight:true; clip:true
-                contentWidth:width; contentHeight:analyticsDoc.contentHeight
-                boundsBehavior:Flickable.StopAtBounds
-                ScrollBar.vertical:ScrollBar {}
-                TextEdit { id:analyticsDoc; width:analyticsScroll.width - 12; height:contentHeight; text:root.v.report || "Загружаем аналитику…"; readOnly:true; selectByMouse:true; textFormat:TextEdit.RichText; wrapMode:TextEdit.Wrap; onLinkActivated:root.backend.invokeReportLink(link) }
-            }
+        AssistantAnalyticsView {
+            anchors.fill:parent; visible:!!root.v.analytics
+            backend:root.backend; viewState:root.v
         }
             }
         }

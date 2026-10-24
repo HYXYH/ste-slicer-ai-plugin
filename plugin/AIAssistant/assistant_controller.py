@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QPushButt
 from .native_window import LocalClient, AssistantWindow, request_id
 from .native_view import FLOW, TOOLS, SETTINGS, session_document, analytics_document, human
 from .user_view import field_label
+from .analytics_view import analytics_projection
 
 PARAMETERS = {key: label for key, (label, unit) in SETTINGS.items()}
 
@@ -29,6 +30,7 @@ class AssistantController(QObject):
         self.report = None
         self.analytics_actions, self.config_version = {}, 0
         self.report_search, self.report_filter = "", "all"
+        self.report_issue = ""
         self.drafts, self.busy, self.pending = {}, set(), set()
         self.message, self.prompt, self.actions = "", None, {}
         self.history, self.analytics_mode, self.disposed = False, False, False
@@ -209,6 +211,8 @@ class AssistantController(QObject):
                       "notice": self.message, "context": {k: v for k, v in self.context.items() if k != "updated_at"}, "params": params,
                       "planId": actionable_plan["id"] if actionable_plan else "", "planVersion": actionable_plan["version"] if actionable_plan else 0,
                       "assessment": self.assessment, "analytics": self.analytics_mode, "chats": self.chats_mode, "report": report,
+                      "analyticsData": analytics_projection(self.report, self.report_search, self.report_filter, self.report_issue),
+                      "analyticsFilter": self.report_filter, "analyticsSearch": self.report_search, "analyticsDays": self.days, "analyticsIssue": self.report_issue,
                       "calibrationFor": session.get("calibration_for", {}), "config": self.config, "configVersion": self.config_version, "prompt": self.prompt or {}}
         if self._view != view:
             self._view = view
@@ -517,7 +521,13 @@ class AssistantController(QObject):
     def filterAnalytics(self, value):
         if value in ("all", "attention", "ready", "saved"):
             self.report_filter = value
+            self.report_issue = ""
             self.update_buttons()
+
+    @pyqtSlot(str)
+    def filterAnalyticsIssue(self, code):
+        self.report_filter, self.report_issue, self.report_search = "attention", code, ""
+        self.update_buttons()
 
     @pyqtSlot()
     def exportCsv(self):

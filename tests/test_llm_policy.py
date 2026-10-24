@@ -59,7 +59,7 @@ class GenerationPolicyTests(unittest.TestCase):
         self.assertEqual(client.opener.open.call_count, 1)
         self.assertEqual(client.opener.open.call_args[1]["timeout"], 30)
         self.assertEqual(metrics[0]["code"], "LLM_TIMEOUT")
-        self.assertEqual(HTTP_TIMEOUT, 120)
+        self.assertEqual(HTTP_TIMEOUT, 300)
 
 
 class DirectDecisionTests(unittest.TestCase):

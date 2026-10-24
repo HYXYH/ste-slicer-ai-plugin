@@ -13,7 +13,7 @@ from .output_contract import provider_schema
 from ..analytics import usage_counts, token_count
 from ..session import ApiError
 
-HTTP_TIMEOUT = 120
+HTTP_TIMEOUT = 300
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_RETRIES = 2

@@ -458,13 +458,13 @@ class SlicerAPI:
 
     def preferences(self, values=None):
         preferences = self.app.getPreferences()
-        for key in ("base_url", "api_key", "model"):
+        for key in ("base_url", "api_key", "model", "pipeline"):
             preferences.addPreference("ai_assistant/" + key, "")
         if values is not None:
             for key, value in values.items():
                 preferences.setValue("ai_assistant/" + key, value)
             self.app.savePreferences()
-        return {k: preferences.getValue("ai_assistant/" + k) for k in ("base_url", "api_key", "model")}
+        return {k: preferences.getValue("ai_assistant/" + k) for k in ("base_url", "api_key", "model", "pipeline")}
 
     def dispatch(self, name, arguments, expected_ref=None):
         if expected_ref and self.get_scene_snapshot()["snapshot_ref"] != expected_ref:

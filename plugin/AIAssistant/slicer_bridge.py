@@ -235,7 +235,7 @@ class DemoBridge:
     def call(self, name, arguments, expected_ref=None):
         if name == "preferences":
             import json
-            config = {"base_url": "", "api_key": "", "model": ""}
+            config = {"base_url": "", "api_key": "", "model": "", "pipeline": ""}
             if os.path.exists(self.preferences_path):
                 with open(self.preferences_path, encoding="utf-8") as source:
                     config.update(json.load(source))

@@ -128,6 +128,11 @@ function renderSession(session) {
     $("session-title").title = session.title;
   }
   $("task-state").textContent = FLOW[session.workflow_state] || TASK[session.task.status] || session.task.status;
+  const busy = Object.values(session.runs || {}).some(r => ["queued", "running"].includes(r.status)) || BUSY_STATES.includes(session.workflow_state);
+  const indicator = busy ? "busy" : ["failed", "interrupted"].includes(session.workflow_state) ? "error" : session.workflow_state === "idle" ? "idle" : "done";
+  $("run-indicator").className = "run-indicator " + indicator;
+  $("run-indicator").title = {busy:"Ассистент думает", error:"Ошибка", done:"Готово", idle:"Ожидание задачи"}[indicator];
+  $("run-indicator").setAttribute("aria-label", $("run-indicator").title);
   $("stop-run").hidden = !Object.values(session.runs || {}).some(r => ["queued", "running"].includes(r.status));
   $("analyze").disabled = !$("stop-run").hidden;
   const d = draft(session.id);
@@ -337,6 +342,7 @@ async function boot() {
   } catch (e) { notice(e.message); $("connection").textContent = "Нет подключения"; }
 }
 const FLOW = {idle:"Готов к работе", queued:"Анализ в очереди", waiting_import:"Ожидание импорта", analyzing:"Анализ задачи…", waiting_user:"Нужны уточнения", plan_ready:"План готов к согласованию", applying:"Применение плана…", slicing:"Расчёт G-code…", result_ready:"Результат готов", exporting:"Сохранение файлов…", completed:"Файлы сохранены", failed:"Операция остановлена с ошибкой", cancelled:"Анализ остановлен", interrupted:"Работа прервана перезапуском", stale:"Данные устарели — повторите анализ"};
+const BUSY_STATES = ["queued", "waiting_import", "analyzing", "applying", "slicing", "exporting"];
 const eventSeq = new Map();
 const TOOL_LABEL = {get_scene_snapshot:"Сцена и размеры", get_printer_capabilities:"Возможности принтера", get_current_configuration:"Текущие настройки", get_setting_definitions:"Ограничения настроек", list_materials:"Каталог материалов", find_compatible_profiles:"Совместимые профили", search_knowledge:"Экспертная база", set_print_mode:"Режим печати", select_material:"Выбор материала", select_quality_profile:"Выбор профиля", set_settings:"Изменение настроек", set_object_transform:"Положение, поворот и масштаб", arrange_objects:"Расстановка", remove_objects:"Удаление моделей", create_quality_profile:"Создание профиля", save_quality_profile:"Сохранение профиля"};
 function button(label, action, primary = false) {
@@ -371,6 +377,22 @@ function renderWorkflow(session, area) {
   if (["failed", "cancelled", "interrupted"].includes(session.workflow_state)) {
     const latest = currentEvents.filter(e => e.type === "error").slice(-1)[0];
     if (latest) panel("Работа остановлена", area).append(node("p", "warning", latest.message));
+  }
+  const rec = map.recommended_settings;
+  if (rec && rec.settings && rec.settings.length) {
+    const box = panel(active ? "Настройки слайсера под задачу · обновляются" : "Настройки слайсера под задачу", area);
+    if (rec.material && rec.material.id) box.append(node("p", "", "Материал: " + rec.material.id + " · " + (rec.material.basis || "")));
+    if (rec.orientation) box.append(node("p", "", "Ориентация: " + rec.orientation));
+    const table = node("table", "settings-table");
+    rec.settings.forEach(s => {
+      const row = node("tr");
+      const value = s.value === true ? "вкл" : s.value === false ? "выкл" : String(s.value) + (s.unit ? " " + s.unit : "");
+      row.append(node("td", "settings-key", s.key), node("td", "settings-value", value), node("td", "muted", s.reason));
+      table.append(row);
+    });
+    box.append(table);
+    (rec.warnings || []).forEach(w => box.append(node("p", "warning", w)));
+    box.append(node("p", "muted", "Источники: " + (rec.source_ids || []).join(", ")));
   }
   if (map.facts.length || map.requirements.length) {
     const known = panel("Известно", area);
@@ -428,6 +450,15 @@ function renderWorkflow(session, area) {
       const input = node("input"); input.placeholder = "Основание проверки: " + r.key; input.setAttribute("aria-label", input.placeholder);
       box.append(input, button("Подтвердить проверку", () => answer(sid, {manual_checks:[{requirement_id:r.id,reason:input.value}]})));
     });
+    const risk = node("div", "question");
+    risk.append(node("p", "muted", "Или напечатайте как прототип: ассистент предложит настройки, а непроверенные требования останутся в ограничениях плана."));
+    const purpose = node("input"); purpose.placeholder = "Цель прототипа, например: проверка геометрии и посадки"; purpose.setAttribute("aria-label", purpose.placeholder);
+    risk.append(purpose, button("Печатать как прототип (принять риск)", () => answer(sid, {accept_risk:{reason:purpose.value || "Прототип"}})));
+    box.append(risk);
+  }
+  if ((map.readiness.accepted_risk_ids || []).length) {
+    const box = panel("Режим прототипа", area);
+    box.append(node("p", "warning", "Риск принят. Не подтверждено требований и неизвестных: " + map.readiness.accepted_risk_ids.length + ". Деталь не годится для эксплуатации без испытаний."));
   }
   Object.values(session.plans).forEach(plan => {
     const box = panel("План печати · версия " + plan.version, area);
@@ -511,7 +542,7 @@ $("stop-run").onclick = async () => {
   try { for (const run of Object.values(currentSession.runs).filter(r => ["queued", "running"].includes(r.status))) await api(sessionPath(sid) + "/runs/" + run.id + "/cancel", "POST", {}); await loadSession(sid); } catch(e) { notice(e.message); }
 };
 async function settingsState() {
-  const config = await api("/api/settings/llm"); $("llm-url").value = config.base_url; $("llm-model").value = config.model; $("llm-key").value = "";
+  const config = await api("/api/settings/llm"); $("llm-url").value = config.base_url; $("llm-model").value = config.model; $("llm-pipeline").value = config.pipeline || "stepwise"; $("llm-key").value = "";
   $("key-state").textContent = config.key_configured ? "✓ Ключ сохранён в STE Slicer" : "Ключ пока не задан";
   $("key-state").classList.toggle("configured", config.key_configured);
   $("llm-key").placeholder = config.key_configured ? "Ключ уже сохранён. Введите новый только для замены" : "Введите API key";
@@ -521,7 +552,7 @@ async function settingsState() {
 $("llm-settings").onclick = async () => { try { await settingsState(); $("llm-result").textContent = ""; $("llm-dialog").showModal(); } catch(e) { notice(e.message); } };
 $("close-llm").onclick = () => { $("llm-key").value = ""; $("llm-dialog").close(); };
 async function saveSettings() {
-  await api("/api/settings/llm", "PATCH", {base_url:$("llm-url").value,model:$("llm-model").value,api_key:$("llm-key").value}); return settingsState();
+  await api("/api/settings/llm", "PATCH", {base_url:$("llm-url").value,model:$("llm-model").value,pipeline:$("llm-pipeline").value,api_key:$("llm-key").value}); return settingsState();
 }
 $("llm-form").onsubmit = async event => { event.preventDefault(); try { const config = await saveSettings(); $("llm-result").textContent = config.key_configured ? "Настройки сохранены. Ключ сохранён в STE Slicer; поле очищено, чтобы не показывать секрет." : "Настройки сохранены. API key пока не задан."; } catch(e) { $("llm-result").textContent = e.message; } };
 $("clear-key").onclick = async () => { try { await api("/api/settings/llm/clear-key", "POST", {}); await settingsState(); $("llm-result").textContent = "Ключ удалён"; } catch(e) { $("llm-result").textContent = e.message; } };

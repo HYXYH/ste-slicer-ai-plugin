@@ -19,8 +19,9 @@ sys.path.insert(0, os.path.join(ROOT, "plugin"))
 from AIAssistant.session import SessionStore, ApiError
 from AIAssistant.server import LocalServer
 from AIAssistant.agent.contracts import validate, obj, NUMBER, strict_json
-from AIAssistant.agent.task_state import new_map, merge_proposal, readiness, resolve_tool_unknowns, COLLECTIONS
+from AIAssistant.agent.task_state import new_map, merge_proposal, readiness, resolve_tool_unknowns, select_default_candidate, COLLECTIONS
 from AIAssistant.agent.knowledge import Knowledge, condition
+from AIAssistant.agent.recommend import recommend, describe
 from AIAssistant.agent.llm_client import LLMClient, endpoint, image_content
 from AIAssistant.agent.mcp_client import MCPClient
 from AIAssistant.slicer_api import digest
@@ -194,10 +195,10 @@ class WorkflowTests(unittest.TestCase):
                         decision_proposals=[{"id": "decision-1", "candidate_id": "candidate-1", "actions": [], "limitations": ["Тестовый адаптер"], "source_refs": refs}])
         return proposal
 
-    def configured(self, responder):
+    def configured(self, responder, pipeline="single"):
         provider = Provider(responder)
         self.providers.append(provider)
-        self.server.settings.update({"base_url": provider.url, "api_key": "test-secret-value", "model": "test-model"})
+        self.server.settings.update({"base_url": provider.url, "api_key": "test-secret-value", "model": "test-model", "pipeline": pipeline})
         return provider
 
     def import_model(self):
@@ -338,6 +339,138 @@ class WorkflowTests(unittest.TestCase):
         if actions:
             proposal["decision_proposals"][0]["actions"] = actions
         return self.server.plans.build(self.sid, proposal)
+
+    def test_failed_analysis_still_returns_reference_settings(self):
+        self.configured(lambda body, count: {"role": "assistant", "content": "stop" if "tools" in body else "{invalid"})
+        self.import_model()
+        self.store.edit(self.sid, lambda s: s["task"].update(description="Кронштейн под нагрузку, PETG, без поддержек"))
+        run = self.server.runner.start(self.sid, "fallback-settings")
+        wait_until(lambda: self.store.get(self.sid)["runs"][run["run_id"]]["status"] == "failed")
+        session = wait_until(lambda: (lambda s: s if s["task_map"].get("recommended_settings") else None)(self.store.internal(self.sid)))
+        settings = {row["key"]: row["value"] for row in session["task_map"]["recommended_settings"]["settings"]}
+        self.assertEqual(settings["support_enable"], False)
+        self.assertEqual(settings["wall_line_count"], 5)
+        self.assertIn("Настройки слайсера под задачу", session["messages"][-1]["text"])
+
+    def stepwise(self):
+        """Answers each small step by its prompt and records which steps were asked."""
+        asked = []
+        def responder(body, count):
+            system = body["messages"][0]["content"]
+            if "выдели из текста" in system:
+                asked.append("requirements")
+                corrected = "10" if "Уточнение" in body["messages"][1]["content"] else "5"
+                return {"role": "assistant", "content": json.dumps({"summary": "Кронштейн полки из PETG.", "requirements": [
+                    {"key": "material", "value": "PETG", "unit": "", "strength": "preference"},
+                    {"key": "load", "value": corrected, "unit": "кг", "strength": "hard"}]}, ensure_ascii=False)}
+            if "найди пробелы" in system:
+                asked.append("clarify")
+                return {"role": "assistant", "content": json.dumps({"questions": [
+                    {"field": "service_temperature", "text": "Рабочая температура?", "reason": "Влияет на материал", "options": ["Комнатная", "До 60 °C"]}]}, ensure_ascii=False)}
+            if "справочник уже выбрал" in system:
+                asked.append("material")
+                return {"role": "assistant", "content": json.dumps({"reason": "PETG прочнее PLA и не боится влаги.", "risks": ["Ползучесть под нагрузкой"]}, ensure_ascii=False)}
+            asked.append("summary")
+            return {"role": "assistant", "content": json.dumps({"summary": "Кронштейн из PETG, 5 стенок.", "limitations": []}, ensure_ascii=False)}
+        provider = self.configured(responder, "stepwise")
+        self.import_model()
+        self.store.edit(self.sid, lambda s: s["task"].update(description="Кронштейн под нагрузку, PETG, без поддержек"))
+        return provider, asked
+
+    def finished(self, run):
+        return wait_until(lambda: (lambda s: s if s["runs"][run["run_id"]]["status"] in ("completed", "failed") else None)(self.store.get(self.sid)))
+
+    def pending(self, prefix):
+        return next(q for q in self.store.internal(self.sid)["task_map"]["questions"] if q["id"].startswith(prefix) and not q.get("answer"))
+
+    def test_stepwise_splits_task_into_small_confirmed_steps(self):
+        self.bridge.context["extruders"][0]["material"]["id"] = "enduse_petg"
+        call = self.bridge.call
+        def call_without_fan(name, args, expected_ref=None):
+            if name == "validate_settings" and any(c["key"] == "cool_fan_speed" for c in args["changes"]):
+                raise ApiError("Настройка недоступна: cool_fan_speed", 400, "INVALID_ARGUMENTS")
+            return call(name, args, expected_ref)
+        self.bridge.call = call_without_fan
+        provider, asked = self.stepwise()
+        session = self.finished(self.server.runner.start(self.sid, "step-1"))
+        self.assertEqual(session["workflow_state"], "waiting_user", session["events"][-1])
+        self.assertEqual(asked, ["requirements", "clarify"])
+        self.assertIn("Я понял задачу так", session["messages"][-1]["text"])
+        self.assertEqual([r["key"] for r in session["task_map"]["requirements"]], ["material", "load"])
+        # Every request is small and carries neither tools nor the full task-map contract.
+        for request in provider.requests:
+            self.assertNotIn("tools", request["body"])
+            self.assertLess(len(json.dumps(request["body"]["messages"], ensure_ascii=False)), 6000)
+        clarify = self.pending("step-clar-")
+        session = self.finished(self.server.runner.answers(self.sid, {"request_id": "a1", "answers": [{"question_id": clarify["id"], "value": "Комнатная"}]}))
+        self.assertEqual(asked, ["requirements", "clarify"], "an answer must not restart earlier steps")
+        self.assertIn("Комнатная", [r["value"] for r in session["task_map"]["requirements"]])
+        confirm = self.pending("step-req-")
+        self.finished(self.server.runner.answers(self.sid, {"request_id": "a2", "answers": [{"question_id": confirm["id"], "value": "Верно"}]}))
+        self.assertEqual(asked, ["requirements", "clarify", "material"])
+        material = self.pending("step-mat-")
+        self.assertEqual(material["options"][0]["label"], "Согласен")
+        session = self.finished(self.server.runner.answers(self.sid, {"request_id": "a3", "answers": [{"question_id": material["id"], "value": "Согласен"}]}))
+        self.assertEqual(asked, ["requirements", "clarify", "material", "summary"])
+        self.assertEqual(session["workflow_state"], "plan_ready", session["events"][-1])
+        plan = next(iter(session["plans"].values()))
+        changes = {c["key"]: c for c in plan["actions"][0]["arguments"]["changes"]}
+        self.assertEqual(changes["support_enable"]["value"], False)
+        self.assertEqual(changes["wall_line_count"]["target"], {"scope": "extruder", "extruder_id": "extruder-1"})
+        self.assertEqual(changes["layer_height"]["target"], {"scope": "global"})
+        self.assertNotIn("cool_fan_speed", changes)
+        self.assertTrue(any("cool_fan_speed" in l for l in plan["limitations"]))
+        # Agreeing with the material accepts the unproven hard requirement as a prototype risk.
+        self.assertEqual(session["task_map"]["readiness"]["accepted_risk_ids"], [r["id"] for r in session["task_map"]["requirements"] if r["key"] == "load"])
+        self.assertIn("result.gcode", session["messages"][-1]["text"])
+        self.assertEqual(self.bridge.mutations, [])
+        # The algorithm ends with G-code: approve, apply and slice, then export.
+        prefix = "/api/sessions/" + self.sid + "/plans/" + plan["id"]
+        self.assertEqual(self.api("POST", prefix + "/approve", {"version": plan["version"]})[0], 200)
+        self.api("POST", prefix + "/apply", {"request_id": "apply-step"})
+        wait_until(lambda: self.store.get(self.sid)["workflow_state"] == "result_ready")
+        self.assertIn("set_settings", self.bridge.mutations)
+        op = next(o for o in self.store.get(self.sid)["operations"].values() if o.get("kind") == "slice")
+        exported = self.server.plans.export(self.sid, op["id"], "test-target", "export-step")
+        self.assertIn("result.gcode", [f["filename"] for f in exported["files"]])
+
+    def test_stepwise_correction_reextracts_and_agent_selects_agreed_material(self):
+        call = self.bridge.call
+        def call_with_petg(name, args, expected_ref=None):
+            if name == "list_materials":
+                return {"items": [{"id": "material-1", "extruder_id": "extruder-1", "compatibility": "pass"},
+                                  {"id": "generic_petg", "extruder_id": "extruder-1", "compatibility": "pass"},
+                                  {"id": "enduse_petg", "extruder_id": "extruder-1", "compatibility": "pass"}], "next_cursor": None}
+            if name == "select_material":
+                result = call(name, args, expected_ref)
+                self.bridge.context["extruders"][0]["material"]["id"] = args["material_id"]
+                return result
+            return call(name, args, expected_ref)
+        self.bridge.call = call_with_petg
+        provider, asked = self.stepwise()
+        self.finished(self.server.runner.start(self.sid, "step-2"))
+        confirm = self.pending("step-req-")
+        session = self.finished(self.server.runner.answers(self.sid, {"request_id": "b1", "answers": [{"question_id": confirm["id"], "value": "Нагрузка 10 кг"}]}))
+        self.assertEqual(asked.count("requirements"), 2)
+        self.assertIn("10", [r["value"] for r in session["task_map"]["requirements"]])
+        confirm = self.pending("step-req-")
+        self.finished(self.server.runner.answers(self.sid, {"request_id": "b2", "answers": [{"question_id": confirm["id"], "value": "Верно"}]}))
+        material = self.pending("step-mat-")
+        session = self.finished(self.server.runner.answers(self.sid, {"request_id": "b3", "answers": [{"question_id": material["id"], "value": "Согласен"}]}))
+        # The slicer held material-1: agreeing lets the agent select Enduse PETG itself and finish the plan.
+        self.assertEqual(self.bridge.mutations, ["select_material"])
+        self.assertEqual(self.bridge.context["extruders"][0]["material"]["id"], "enduse_petg")
+        self.assertEqual(session["workflow_state"], "plan_ready", session["events"][-1])
+        self.assertEqual(next(iter(session["plans"].values()))["selected"]["material_id"], "enduse_petg")
+        self.assertEqual(session["task_map"]["recommended_settings"]["material"]["basis"], "подтверждён пользователем")
+
+    def test_accept_risk_answer_is_stored_and_restarts_analysis(self):
+        self.server.runner.answers(self.sid, {"request_id": "risk1", "accept_risk": {"reason": "Проверка посадки"}})
+        session = self.store.internal(self.sid)
+        self.assertEqual(session["task_map"]["risk_acceptance"]["reason"], "Проверка посадки")
+        self.assertIn("режим прототипа", session["messages"][-1]["text"])
+        with self.assertRaises(ApiError):
+            self.server.runner.answers(self.sid, {"request_id": "risk2", "accept_risk": {}})
 
     def test_stale_plan_manual_scene_edit_and_foreign_object(self):
         plan = self.prepare_plan()
@@ -543,6 +676,76 @@ class StateTests(unittest.TestCase):
             self.assertTrue(result["conflicts"])
             self.assertEqual(knowledge.search("part", {"temperature": 10})["items"], [])
             self.assertTrue(knowledge.search("part", {"temperature": 50})["items"][0]["usable_as_evidence"])
+
+    def test_reference_records_are_citable_but_reviewed_rules_still_need_conditions(self):
+        with tempfile.TemporaryDirectory() as root:
+            reference = {"id": "mat", "version": 1, "title": "PETG", "status": "reference", "reviewed_by": None, "reviewed_at": None,
+                         "source": {"document": "TDS"}, "applies_when": [], "excluded_when": [], "required_facts": [],
+                         "affected_decisions": ["material"], "recommendations": {}, "limits": {"hdt_0_45mpa_c": 68}}
+            unsourced = dict(reference, id="bare", source={})
+            with open(os.path.join(root, "materials.json"), "w") as target:
+                json.dump([reference, unsourced], target)
+            result = Knowledge(root).search("petg")
+            usable = {row["id"]: row["usable_as_evidence"] for row in result["items"]}
+            self.assertEqual(usable, {"mat": True, "bare": False})
+            self.assertTrue(any(w.startswith("KNOWLEDGE_GAP") for w in result["warnings"]))
+            self.assertTrue(any("status=reference" in w for w in result["warnings"]))
+
+    def test_shipped_knowledge_base_is_valid_and_closes_the_gap(self):
+        knowledge = Knowledge()
+        result = knowledge.search("кронштейн PETG без поддержек", limit=50)
+        ids = [row["id"] for row in result["items"]]
+        self.assertIn("mat-petg", ids)
+        self.assertIn("proc-load-bearing", ids)
+        self.assertFalse(any(w.startswith("KNOWLEDGE_GAP") for w in result["warnings"]))
+        self.assertEqual(result["conflicts"], [])
+
+    def test_risk_acceptance_turns_unproven_requirements_into_accepted_risks(self):
+        scene = {"snapshot_ref": {"id": "s"}, "objects": [{"id": "n"}]}
+        task = new_map()
+        task.update(target_object_ids=["n"], snapshot_ref=scene["snapshot_ref"],
+                    candidates=[{"id": "c", "status": "selected", "requirement_checks": [], "missing_fields": []}],
+                    requirements=[{"id": "r", "key": "strength", "strength": "hard", "status": "unknown"}],
+                    unknowns=[{"id": "u-knowledge", "blocking": True, "resolution": "knowledge"},
+                              {"id": "u-user", "blocking": True, "resolution": "user"}])
+        self.assertEqual(readiness(task, scene, {})["status"], "blocked")
+        task["risk_acceptance"] = {"message_id": "m", "reason": "Прототип"}
+        result = readiness(task, scene, {})
+        self.assertEqual(result["status"], "needs_input")
+        self.assertEqual(sorted(result["accepted_risk_ids"]), ["r", "u-knowledge"])
+        self.assertEqual(result["blocking_unknown_ids"], ["u-user"])
+        task["unknowns"][1]["resolved"] = True
+        self.assertEqual(readiness(task, scene, {})["status"], "ready_for_plan")
+        task["conflicts"] = [{"id": "x"}]
+        self.assertEqual(readiness(task, scene, {})["status"], "blocked")
+
+    def test_recommend_settings_for_bracket_and_gear(self):
+        bracket = recommend("Кронштейн под нагрузку, PETG, без поддержек", {"mode": {"id": "classic"},
+                            "extruders": [{"material": {"id": "enduse_petg_stereotech_ste320_0.4"}}]})
+        values = {row["key"]: row["value"] for row in bracket["settings"]}
+        self.assertEqual(bracket["material"]["id"], "enduse_petg")
+        self.assertEqual((values["material_print_temperature"], values["material_bed_temperature"], values["cool_fan_speed"]), (235, 60, 20))
+        self.assertEqual((values["wall_line_count"], values["infill_sparse_density"], values["support_enable"]), (5, 50, False))
+        gear = recommend("Шестерня, рабочая температура до +70°C, температура стеклования (Tg) не ниже 85-90°C, УФ",
+                         {"extruders": [{"material": {"id": "generic_pla_175"}}]})
+        self.assertEqual(gear["material"]["id"], "enduse_abs")
+        self.assertEqual({row["key"]: row["value"] for row in gear["settings"]}["layer_height"], 0.15)
+        self.assertTrue(any("УФ" in w for w in gear["warnings"]))
+        explicit = recommend("Шестерня из PETG, Tg не ниже 90 °C", None)
+        self.assertEqual(explicit["material"]["id"], "enduse_petg")
+        self.assertTrue(any("Подходят по температуре" in w for w in explicit["warnings"]))
+        self.assertIn("support_enable", describe(bracket))
+
+    def test_default_candidate_prefers_current_mode_with_a_decision(self):
+        task = new_map()
+        task["candidates"] = [{"id": "a", "mode": "classic", "status": "possible"},
+                              {"id": "b", "mode": "cylindrical_full", "status": "possible"},
+                              {"id": "c", "mode": "cylindrical_full", "status": "possible"}]
+        task["decision_proposals"] = [{"candidate_id": "a"}, {"candidate_id": "c"}]
+        self.assertEqual(select_default_candidate(task, "cylindrical_full"), "c")
+        self.assertEqual(select_default_candidate(task, "cylindrical_full"), None)
+        task["candidates"][2]["status"] = "possible"
+        self.assertEqual(select_default_candidate(task, "cylindrical"), "a")
 
     def test_endpoint_exactly_once_and_images_are_not_model_dumps(self):
         self.assertEqual(endpoint("https://example.test/v1/"), "https://example.test/v1/chat/completions")

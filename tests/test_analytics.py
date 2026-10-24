@@ -264,7 +264,8 @@ class AnalyticsHTTPTests(unittest.TestCase):
         self.assertEqual(report["llm"]["requests"], 3)
         self.assertIsNone(report["llm"]["total_tokens"])
         self.assertTrue(all(t["p50_ms"] is not None for t in report["tools"]))
-        self.assertIn("knowledge", report["sessions"][0]["issues"])
+        # The shipped base now has cited reference recommendations, so no knowledge gap is reported.
+        self.assertNotIn("knowledge", report["sessions"][0]["issues"])
         self.assertEqual(self.bridge.mutations, [])
 
     def test_apply_export_and_failed_mutation_are_measured_once(self):

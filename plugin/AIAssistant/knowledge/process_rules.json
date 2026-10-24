@@ -1,0 +1,69 @@
+[
+  {
+    "id": "proc-orientation-anisotropy", "version": 1, "title": "Ориентация по нагрузке: межслойная прочность ниже прочности в плоскости слоя", "status": "reference",
+    "source": {"document": "Polymaker TDS: PolyLite PLA V5.4 (Z/XY = 40.5/52.3), PolyLite ABS V5.5 (29.7/33.4), PolyMide CoPA V5.5 (45.8/78)",
+               "url": "https://polymaker.com/wp-content/uploads/lana-downloads/PolyLite-PLA_TDS_EN_V5.4.pdf"},
+    "reviewed_by": null, "reviewed_at": null,
+    "applies_when": [], "excluded_when": [], "required_facts": ["load_direction"],
+    "affected_decisions": ["orientation"],
+    "recommendations": {"orientation_rule": "Основные растягивающие и изгибающие напряжения располагать в плоскости слоя (XY). Кронштейн — плечом на стол, чтобы изгиб шёл вдоль слоёв. Шестерня, колесо — ось вращения вертикально (по Z), зубья лежат в плоскости слоя."},
+    "limits": {"z_to_xy_strength_ratio": [0.59, 0.89]},
+    "question_templates": [], "calibration_hint": null,
+    "notes": "Межслойная прочность составляет 59–89% от прочности в плоскости слоя, у нейлона — около 60%. Для 3D-печати это главный фактор ориентации. В 5D-режиме слои следуют форме детали, анизотропия ниже."
+  },
+  {
+    "id": "proc-load-bearing", "version": 1, "title": "Силовая деталь: стенки, крышки, заполнение", "status": "reference",
+    "source": {"document": "Типовая практика FDM для функциональных деталей: прочность определяется в основном периметрами, затем заполнением"},
+    "reviewed_by": null, "reviewed_at": null,
+    "applies_when": [], "excluded_when": [], "required_facts": [],
+    "affected_decisions": ["settings"],
+    "recommendations": {"wall_line_count": [4, 6], "top_layers": [5, 8], "bottom_layers": [5, 8], "infill_sparse_density": [40, 60], "infill_pattern": "gyroid"},
+    "limits": {"wall_thickness_mm_at_0_4_nozzle": [1.6, 2.4]},
+    "question_templates": [], "calibration_hint": null,
+    "notes": "Добавить периметры эффективнее, чем поднимать заполнение. Для мелких зубчатых деталей (модуль ≤ 1,5) задавать столько стенок, чтобы зубья печатались сплошными, или заполнение 100%. Отверстия под винты — не менее 4 периметров."
+  },
+  {
+    "id": "proc-no-supports", "version": 1, "title": "Печать без поддержек", "status": "reference",
+    "source": {"document": "Типовая практика FDM: нависания до 45° от вертикали и короткие мосты печатаются без поддержек"},
+    "reviewed_by": null, "reviewed_at": null,
+    "applies_when": [], "excluded_when": [], "required_facts": [],
+    "affected_decisions": ["orientation", "settings"],
+    "recommendations": {"support_enable": false, "support_angle": 45},
+    "limits": {"max_overhang_deg": 45, "max_bridge_mm": 10},
+    "question_templates": [], "calibration_hint": "При провисании мостов снизить скорость и температуру, усилить обдув (кроме ABS/PC/PA).",
+    "notes": "Ставить деталь самой большой плоской гранью на стол и проверять нависания в режиме просмотра слайсера. Если без поддержек нельзя, сказать об этом прямо и предложить 5D-режим или разбиение детали."
+  },
+  {
+    "id": "proc-drying", "version": 1, "title": "Сушка гигроскопичных материалов перед печатью", "status": "reference",
+    "source": {"document": "Типовые рекомендации производителей филамента (Polymaker, Prusament); значения ориентировочные"},
+    "reviewed_by": null, "reviewed_at": null,
+    "applies_when": [], "excluded_when": [], "required_facts": [],
+    "affected_decisions": ["material"],
+    "recommendations": {"drying_note": "PA: 70–80 °C 8–12 ч; PC: 70–80 °C 6–8 ч; PETG: 60–65 °C 4–6 ч; TPU: 50–55 °C 4–6 ч; печатать из сушильного бокса."},
+    "limits": {},
+    "question_templates": [], "calibration_hint": null,
+    "notes": "Влажный пруток трещит, пузырится и даёт слабые слои. Особенно критично для PA и PC."
+  },
+  {
+    "id": "proc-service-temperature", "version": 1, "title": "Выбор материала по рабочей температуре", "status": "reference",
+    "source": {"document": "Инженерное правило: рабочая температура под нагрузкой ниже HDT (0,45 МПа) с запасом 10–15 °C; см. справочные записи mat-*"},
+    "reviewed_by": null, "reviewed_at": null,
+    "applies_when": [], "excluded_when": [], "required_facts": ["service_temperature_max"],
+    "affected_decisions": ["material"],
+    "recommendations": {"material_selection_rule": "Отсеивать материалы, у которых HDT(0,45 МПа) минус 10–15 °C ниже максимальной рабочей температуры. Ориентировочный предел под нагрузкой: PLA ~50 °C, PETG ~60 °C, ABS ~85 °C, PA ~90 °C (сухой), PC ~100 °C, композиты PC/PA со стекловолокном выше."},
+    "limits": {"safety_margin_c": [10, 15]},
+    "question_templates": [], "calibration_hint": null,
+    "notes": "Tg и HDT — разные величины. Требование «Tg ≥ X» сравнивать с glass_transition_c, требование по нагреву под нагрузкой — с HDT."
+  },
+  {
+    "id": "proc-layer-quality", "version": 1, "title": "Высота слоя и межслойное сцепление", "status": "reference",
+    "source": {"document": "Типовая практика FDM: высота слоя не более 75% диаметра сопла; температура и скорость влияют на спекание слоёв"},
+    "reviewed_by": null, "reviewed_at": null,
+    "applies_when": [], "excluded_when": [], "required_facts": [],
+    "affected_decisions": ["settings"],
+    "recommendations": {"layer_height": [0.15, 0.25]},
+    "limits": {"max_layer_height_to_nozzle_ratio": 0.75},
+    "question_templates": [], "calibration_hint": "Для прочности по Z: верх диапазона температуры материала, меньший обдув, умеренная скорость.",
+    "notes": "Для сопла 0,4 мм: 0,2 мм — баланс скорости и прочности, 0,1–0,15 мм — точные профили (зубья, резьбы)."
+  }
+]

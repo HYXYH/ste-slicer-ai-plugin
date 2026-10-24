@@ -55,7 +55,7 @@
       <div><span class="context-label">Профиль</span><strong id="profile">—</strong></div>
       <p id="context-error" class="context-error" hidden></p>
     </section>
-    <div class="task-line"><span id="connection" class="connection">Подключение…</span><span id="task-state"></span><button id="analyze" class="button subtle">Повторить анализ</button><button id="stop-run" class="button subtle" hidden>Остановить</button></div>
+    <div class="task-line"><span id="connection" class="connection">Подключение…</span><span class="task-status"><span id="run-indicator" class="run-indicator idle" role="img" aria-label="Состояние ассистента"></span><span id="task-state"></span></span><button id="analyze" class="button subtle">Повторить анализ</button><button id="stop-run" class="button subtle" hidden>Остановить</button></div>
     <section id="messages" class="messages" aria-label="История задачи" aria-live="polite"></section>
     <div class="compose-area">
       <div id="notice" class="notice" role="alert" hidden></div>
@@ -87,6 +87,8 @@
     <form id="llm-form"><h2>Подключение LLM</h2>
       <label for="llm-url">Base URL</label><input id="llm-url" type="url" placeholder="https://…/v1" required>
       <label for="llm-model">Модель</label><input id="llm-model" required maxlength="160">
+      <label for="llm-pipeline">Режим анализа</label>
+      <select id="llm-pipeline"><option value="stepwise">Пошагово: маленькие запросы и подтверждения (для лёгких моделей)</option><option value="single">Одним запросом (полная карта задачи)</option></select>
       <label for="llm-key">API key</label>
       <p id="key-state" class="key-status" role="status"></p>
       <input id="llm-key" type="password" autocomplete="new-password" aria-describedby="key-help" placeholder="Введите ключ">

@@ -53,8 +53,10 @@ class Knowledge:
             missing.extend(f for f in record["required_facts"] if facts.get(f) is None)
             row["missing_fields"] = sorted(set(missing))
             row["applicability"] = "unknown" if missing else "pass"
-            row["usable_as_evidence"] = (row["status"] == "reviewed" and not missing
-                                         and bool(row.get("reviewed_by") and row.get("reviewed_at")))
+            # Reference records hold cited datasheet values: they may back a setting, never certify a part.
+            row["usable_as_evidence"] = not missing and (
+                (row["status"] == "reviewed" and bool(row.get("reviewed_by") and row.get("reviewed_at")))
+                or (row["status"] == "reference" and bool(row.get("source", {}).get("document"))))
             row["relevance"] = sum(word in json.dumps(record, ensure_ascii=False).lower() for word in query.lower().split())
             found.append(row)
         found.sort(key=lambda row: (not row["usable_as_evidence"], -len(row["applies_when"]), -row["relevance"], row["id"]))
@@ -70,6 +72,9 @@ class Knowledge:
                 raise ValueError()
         except ValueError:
             fail("Неверный cursor")
+        warnings = [] if any(r["usable_as_evidence"] and r["recommendations"] for r in found) else [
+            "KNOWLEDGE_GAP: подтверждённых экспертных рекомендаций нет; описания задач не являются рецептами печати"]
+        if any(r["usable_as_evidence"] and r["status"] == "reference" for r in found):
+            warnings.append("Справочные данные (status=reference) не доказывают прочность конкретной детали")
         return {"items": found[offset:offset + limit], "next_cursor": str(offset + limit) if offset + limit < len(found) else None,
-                "conflicts": conflicts, "warnings": [] if any(r["usable_as_evidence"] and r["recommendations"] for r in found)
-                else ["KNOWLEDGE_GAP: подтверждённых экспертных рекомендаций нет; описания задач не являются рецептами печати"]}
+                "conflicts": conflicts, "warnings": warnings}

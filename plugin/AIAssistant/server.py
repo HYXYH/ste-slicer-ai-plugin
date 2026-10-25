@@ -369,7 +369,7 @@ class Handler(BaseHTTPRequestHandler):
                 return server.calibration.state(sid), 200
             if len(parts) == 5 and method == "POST":
                 body = self._json()
-                validate(body, obj({"decision_id": ID, "costs": {"type": "object"}}))
+                validate(body, obj({"decision_id": ID, "costs": {"type": "object"}, "tariffs": {"type": "object"}}))
                 return server.calibration.command(sid, parts[4], body), 200
             raise ApiError("Маршрут калибровки не найден", 404)
         if action == "workspace" and len(parts) == 4:

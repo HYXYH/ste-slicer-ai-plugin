@@ -9,6 +9,7 @@ Rectangle {
     property var v: backend ? backend.view : ({})
     property var assessment: v.assessment || ({})
     property string modal: ""
+    onModalChanged:if(modal === "calibrationInfo"){formScroll.contentY=0;root.act("loadIntelligentCalibration");}
     property var selectedChats: []
     property string deleteChatId: ""
     property string deleteChatTitle: ""
@@ -425,10 +426,17 @@ Rectangle {
         anchors.fill:parent; color:"#661c3e56"; z:100
         MouseArea { anchors.fill:parent; acceptedButtons:Qt.AllButtons; onWheel:wheel.accepted = true }
         Rectangle {
-            anchors.centerIn:parent; width:Math.min(600,root.width-32); height:Math.min(forms.height+40,root.height-28); color:"#f8fcff"; radius:12; border.color:"#d4e5f0"
+            anchors.centerIn:parent; width:Math.min(root.modal === "calibrationInfo" ? 920 : 600,root.width-32); height:Math.min(forms.height+(root.modal === "calibrationInfo" ? 112 : 40),root.height-28); color:"#f8fcff"; radius:12; border.color:"#d4e5f0"
+            RowLayout {
+                visible:root.modal === "calibrationInfo";anchors.left:parent.left;anchors.right:parent.right;anchors.top:parent.top;anchors.margins:24;height:48;spacing:12
+                Text { Layout.fillWidth:true;text:"Как работает калибровка";font.pixelSize:root.width<650?21:27;font.bold:true;color:"#103564";wrapMode:Text.Wrap }
+                AssistantButton { text:"Закрыть";onClicked:root.modal="" }
+            }
             Flickable {
                 id:formScroll
+                objectName:"assistantModalScroll"
                 anchors.fill:parent; anchors.margins:20; clip:true
+                anchors.topMargin:root.modal === "calibrationInfo" ? 88 : 20
                 contentWidth:width; contentHeight:forms.height
                 boundsBehavior:Flickable.StopAtBounds
                 ScrollBar.vertical:ScrollBar {}
@@ -438,7 +446,7 @@ Rectangle {
                     onWidthChanged:fitWidths()
                     onChildrenChanged:fitWidths()
                     Component.onCompleted:fitWidths()
-                    RowLayout { Layout.fillWidth:true; Text { Layout.fillWidth:true; text:({deleteChat:"Удалить чат?",settings:"Подключение LLM",prompt:(root.v.prompt || {}).title,assessment:"Условия эксплуатации",calibration:"Калибровочный куб",calibrationInfo:"Как работает калибровка",measurements:"Измерения после ручной печати"})[root.modal] || ""; wrapMode:Text.Wrap; color:"#1b4566"; font.pixelSize:18; font.bold:true } AssistantButton { text:"Закрыть"; compact:true; onClicked: { root.modal=""; secret.text=""; root.act("dismissPrompt"); } } }
+                    RowLayout { visible:root.modal !== "calibrationInfo"; Layout.fillWidth:true; Text { Layout.fillWidth:true; text:({deleteChat:"Удалить чат?",settings:"Подключение LLM",prompt:(root.v.prompt || {}).title,assessment:"Условия эксплуатации",calibration:"Калибровочный куб",calibrationInfo:"Как работает калибровка",measurements:"Измерения после ручной печати"})[root.modal] || ""; wrapMode:Text.Wrap; color:"#1b4566"; font.pixelSize:18; font.bold:true } AssistantButton { text:"Закрыть"; compact:true; onClicked: { root.modal=""; secret.text=""; root.act("dismissPrompt"); } } }
                     ColumnLayout {
                         visible:root.modal === "deleteChat"; Layout.fillWidth:true; spacing:12
                         Text { Layout.fillWidth:true; text:root.deleteChatTitle; textFormat:Text.PlainText; wrapMode:Text.Wrap; font.bold:true; color:"#36556e" }
@@ -477,28 +485,9 @@ Rectangle {
                         TextField { id:assessmentValue; Layout.fillWidth:true; placeholderText:"Ответ, единицы или «не применяется»" }
                         AssistantButton { text:"Сохранить ответ"; primary:true; onClicked: { root.backend.answerAssessment(assessmentField.text,assessmentValue.text); root.modal=""; } }
                     }
-                    Column {
-                        visible:root.modal === "calibrationInfo"; spacing:12
-                        Text { width:parent.width;text:(((root.v.intelligentCalibration || {}).decision || {}).reason || "");textFormat:Text.PlainText;wrapMode:Text.Wrap;color:"#426f91";font.pixelSize:12 }
-                        Text { width:parent.width;text:"Недостаточно проверено: " + ((((root.v.intelligentCalibration || {}).decision || {}).unchecked_labels || []).join("; "));wrapMode:Text.Wrap;color:"#987947";font.pixelSize:11 }
-                        Text { width:parent.width;text:"Учтены печати: " + ((((root.v.intelligentCalibration || {}).decision || {}).print_ids || []).join(", ") || "сопоставимых проверок нет");textFormat:Text.PlainText;wrapMode:Text.Wrap;color:"#6988a2";font.pixelSize:10 }
-                        Text { width:parent.width;text:"Тест: " + (((((root.v.intelligentCalibration || {}).decision || {}).test || {}).title) || "не выбран") + " · " + (((((root.v.intelligentCalibration || {}).decision || {}).test || {}).limitations) || "");wrapMode:Text.Wrap;color:"#6988a2";font.pixelSize:11 }
-                        Repeater {
-                            model:(((root.v.intelligentCalibration || {}).decision || {}).features || []).filter(function(f){return f.required;})
-                            Text { width:parent.width;text:modelData.title + ": учтено проверок с весами " + modelData.effective_trials + ", успешных " + modelData.success_weight.toFixed(1) + ", неудачных " + modelData.failure_weight.toFixed(1) + (modelData.mean === null || modelData.mean === undefined ? "; данных недостаточно для вероятностной оценки" : "; оценка по истории, не гарантия");wrapMode:Text.Wrap;color:"#6988a2";font.pixelSize:11 }
-                        }
-                        Text { width:parent.width;text:"Для расчёта U можно указать потери от неудачной основной печати и стоимость выбранного теста в одинаковых условных единицах. Без данных об обнаружении и исправлении останутся правила холодного старта.";wrapMode:Text.Wrap;color:"#6988a2";font.pixelSize:11 }
-                        RowLayout { width:parent.width;TextField { id:mainLoss;Layout.fillWidth:true;placeholderText:"Потери при неудаче" } TextField { id:testCost;Layout.fillWidth:true;placeholderText:"Стоимость теста" } }
-                        AssistantButton { text:"Обновить оценку с затратами";compact:true;onClicked:if(root.backend)root.backend.calibrationCommand("refresh",{costs:{main_loss:Number(mainLoss.text.replace(",",".")),test_cost:Number(testCost.text.replace(",","."))}}) }
-                        Repeater {
-                            model:root.v.calibrationInfo || []
-                            Column {
-                                width:forms.width; spacing:6
-                                Text { width:parent.width; text:modelData.title + " · " + modelData.state; textFormat:Text.PlainText; wrapMode:Text.Wrap; font.bold:true; font.pixelSize:13; color:"#315f84" }
-                                Text { width:parent.width; text:modelData.text; textFormat:Text.PlainText; wrapMode:Text.Wrap; font.pixelSize:12; color:"#6d88a1" }
-                            }
-                        }
-                        AssistantButton { text:"Открыть раздел «Калибровка»"; onClicked: { root.modal=""; root.act("showCalibrationInfo"); } }
+                    AssistantCalibrationExplanation {
+                        visible:root.modal === "calibrationInfo";backend:root.backend;viewState:root.v
+                        onOpenKnowledge:{root.modal="";root.act("showCalibrationInfo");}
                     }
                     ColumnLayout {
                         visible:root.modal === "calibration"; Layout.fillWidth:true

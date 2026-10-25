@@ -8,6 +8,7 @@ Rectangle {
     property var viewState:({})
     property var value:viewState.intelligentCalibration || ({})
     property var decision:value.decision || ({})
+    property var pricing:value.pricing || ({})
     property var run:value.run || ({})
     property bool active:["preparing","test_ready","awaiting_print","review"].indexOf(run.state) >= 0
     property var entries:run.prints || []
@@ -54,6 +55,11 @@ Rectangle {
             AssistantButton { text:"i";compact:true;onClicked:card.explain() }
         }
         Text { width:parent.width;text:card.decision.reason || "";textFormat:Text.PlainText;wrapMode:Text.Wrap;color:"#607e96";font.pixelSize:12 }
+        Text {
+            width:parent.width;visible:(card.pricing.main || {}).cost!==undefined && (card.pricing.main || {}).cost!==null
+            text:"Расчётная стоимость: основная печать — "+Number((card.pricing.main || {}).cost || 0).toFixed(2)+" ₽ · тест — "+(((card.pricing.test || {}).cost!==undefined && (card.pricing.test || {}).cost!==null)?Number(card.pricing.test.cost).toFixed(2)+" ₽":"после нарезки")
+            wrapMode:Text.Wrap;color:"#3282b4";font.pixelSize:12
+        }
         Text { width:parent.width;visible:!card.active;text:"Недостаточно проверено: " + (card.decision.unchecked_labels || []).join("; ");color:"#8d754f";font.pixelSize:11;wrapMode:Text.Wrap }
         Text { width:parent.width;visible:!card.active && !!card.decision.test;text:"Выбран тест: " + ((card.decision.test || {}).title || "") + ". Проверки: " + ((card.decision.test || {}).checks || []).map(card.title).join("; ");color:"#5e8aa5";font.pixelSize:11;wrapMode:Text.Wrap }
         Flow {

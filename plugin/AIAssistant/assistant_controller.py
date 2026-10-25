@@ -800,6 +800,8 @@ class AssistantController(QObject):
     @pyqtSlot()
     def loadIntelligentCalibration(self):
         sid = self.current
+        if not sid:
+            return
         def loaded(value):
             if sid == self.current:
                 self.calibration_data = value
@@ -812,6 +814,8 @@ class AssistantController(QObject):
         def loaded(value):
             if sid == self.current:
                 self.calibration_data = value
+                if command == "tariffs":
+                    self.notice("Тарифы сохранены.")
                 self.update_buttons()
             self.poll()
         self.client.call(self.path(sid) + "/intelligent-calibration/" + command, loaded, "POST", dict(body))

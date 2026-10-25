@@ -212,12 +212,12 @@ def assess(snapshot, library, text, policy, costs=None):
     covered = [k for k in unchecked if test and k in test["checks"]]
     if utility is not None:
         offer, method = utility > policy["minimum_utility"], "utility"
-        reason = "Ожидаемая польза одного проверяемого риска: {:.2f} в указанных вами единицах затрат. Вероятности — оценки по истории, не гарантия.".format(utility)
+        reason = "Ожидаемая польза одного проверяемого риска: {:.2f} ₽. Стоимость рассчитана по нарезке и тарифам; вероятности — оценки по истории, не гарантия.".format(utility)
     else:
         offer = bool(covered) and (failed or (len(unchecked) >= policy["cold_start_min_unchecked"] and (costly or complex_model)))
         method = "cold_start"
         reason = ("Есть неудачные проверки в сопоставимых условиях." if failed else "Характеристики ещё недостаточно проверены; основная модель сложная или затраты на неудачу потенциально велики." if offer else "Мало опыта, но польза отдельного теста пока не обоснована." if unchecked else "Характеристики проверены в сопоставимых условиях.")
-        reason += " Для численного U не хватает независимых наблюдений обнаружения/исправления или ваших оценок затрат."
+        reason += " Для численного расчёта пользы нужны данные проверок, результаты нарезки и тарифы."
     if not test:
         offer = False
         reason = "Нет проверенного теста для текущего режима. Планарные FDM-тесты не переносятся автоматически на 5D."

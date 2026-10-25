@@ -30,8 +30,8 @@ snapshot = {"context": {"printer": {"id": "preview"}, "mode": {"id": "classic"},
             "objects": [{"dimensions_mm": [150, 80, 70]}], "settings": [{"target": {"scope": "global"}, "values": {"speed_layer_0": 20}}]}
 decision = assess(snapshot, {"prints": [], "lessons": []}, "Сложная деталь с точными посадками, мостами, нависаниями и ретрактом", load_policy())
 state = {"title": "Предпросмотр калибровки", "sessionId": "", "calibrationInfo": CALIBRATION, "llmRecipient": "Получатель из настроек LLM",
-         "intelligentCalibration": {"decision": decision, "run": {}}}
-pages = ["offer", "active", "info"]
+         "intelligentCalibration": {"decision": decision, "run": {}, "pricing": {"printer_id": "preview", "printer_title": "Принтер · предпросмотр", "materials": [{"id": "preview", "title": "Материал · предпросмотр", "price": None}]}}}
+pages = ["offer", "active", "info", "info-settings"]
 folder = os.path.join(ROOT, ".local-assistant-data")
 os.makedirs(folder, exist_ok=True)
 
@@ -45,12 +45,19 @@ def next_page():
     if page == "active":
         value["intelligentCalibration"]["run"] = {"state": "preparing", "test": decision["test"], "prints": [], "operations": [], "catalog": catalog()}
     widget.rootObject().setProperty("v", value)
-    widget.rootObject().setProperty("modal", "calibrationInfo" if page == "info" else "")
+    widget.rootObject().setProperty("modal", "calibrationInfo" if page.startswith("info") else "")
+    if page == "info-settings":
+        widget.rootObject().findChild(QObject, "calibrationExplanation").setProperty("settingsExpanded", True)
     widget.show()
     def capture():
         widget.rootObject().findChild(QObject, "conversation").setProperty("contentY", 0)
-        widget.grab().save(os.path.join(folder, "calibration-" + page + ".png"))
-        next_page()
+        if page == "info-settings":
+            scroll = widget.rootObject().findChild(QObject, "assistantModalScroll")
+            scroll.setProperty("contentY", max(0, scroll.property("contentHeight")-scroll.property("height")))
+        def save():
+            widget.grab().save(os.path.join(folder, "calibration-" + page + ".png"))
+            next_page()
+        QTimer.singleShot(80, save)
     QTimer.singleShot(450, capture)
 
 

@@ -18,6 +18,8 @@ class Calibration:
     def __init__(self, server):
         self.server, self.store, self.bridge = server, server.store, server.bridge
         self.db = server.print_feedback.db
+        from .print_cost import PrintPricing
+        self.pricing = PrintPricing(self.store)
         self.lock = threading.RLock()
         self.closed = threading.Event()
         for row in self.store.listing()["sessions"]:
@@ -30,6 +32,8 @@ class Calibration:
         if session.get("calibration_for") or session.get("intelligent_calibration", {}).get("state") in ACTIVE:
             return
         current = self.bridge.call("get_print_context", {})
+        if current.get("snapshot_ref") != plan.get("applied_snapshot_ref", plan.get("snapshot_ref")):
+            return
         changes = [dict(c, source="plan", reason="plan", unit=None) for a in plan["actions"] if a["tool"] == "set_settings" for c in a["arguments"]["changes"]]
         selected = plan["selected"]
         target = proposed_snapshot(current, {"material": {"id": selected["material_id"]}, "mode": selected["mode"], "settings": changes})
@@ -40,8 +44,13 @@ class Calibration:
             return
         policy = load_policy(self.store.root)
         text = session["task"]["description"] + "\n" + "\n".join(m["text"] for m in session["messages"] if m["role"] == "user" and not m.get("calibration_message") and not m.get("parameter_explanation"))
-        costs = session.get("calibration_costs", {})
-        decision = assess(target, self.db.library(limit=None), text, policy, costs)
+        library = self.db.library(limit=None)
+        decision = assess(target, library, text, policy)
+        pricing_session = copy.deepcopy(session)
+        pricing_session["calibration_decision"] = {"plan_id": plan["id"]}
+        costs = self.pricing.view(pricing_session, target, decision.get("test"))["costs"]
+        if costs:
+            decision = assess(target, library, text, policy, costs)
         key = hashlib.sha256(encode([conditions(target), decision["unchecked"], costs]).encode("utf-8")).hexdigest()
         decision.update(id=key, plan_id=plan["id"], created_at=now(), snapshot=target)
         old = session.get("calibration_decision", {})
@@ -57,12 +66,7 @@ class Calibration:
 
     def refresh(self, sid, costs=None):
         if costs is not None:
-            if set(costs) - {"main_loss", "test_cost"}:
-                raise ApiError("Ожидаются main_loss и test_cost в одинаковых условных единицах")
-            import math
-            if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0 for v in costs.values()):
-                raise ApiError("Затраты должны быть конечными неотрицательными числами")
-            self.store.edit(sid, lambda s: s.update(calibration_costs=costs))
+            raise ApiError("Стоимость теперь рассчитывается по нарезке. Укажите цену пластика за грамм и стоимость часа принтера в настройках")
         session = self.store.internal(sid)
         plans = [p for p in session["plans"].values() if p["status"] in ("validated", "approved", "applied")]
         if not plans:
@@ -82,8 +86,21 @@ class Calibration:
             for key in ("main_task_map", "main_snapshot", "baseline_snapshot"):
                 run.pop(key, None)
         decision = copy.deepcopy(session.get("calibration_decision", {}))
+        snapshot = decision.get("snapshot") or session.get("intelligent_calibration", {}).get("main_snapshot")
+        if not snapshot:
+            try:
+                snapshot = self.bridge.call("get_print_context", {})
+            except ApiError:
+                snapshot = {}
+        pricing = self.pricing.view(session, snapshot, run.get("test") or decision.get("test"))
+        # The first finished slice supplies cost data after the original proposal was prepared.
+        if decision.get("snapshot") and run.get("state") not in ACTIVE and decision.get("costs", {}) != pricing["costs"]:
+            plan = session["plans"].get(decision.get("plan_id"), {})
+            if plan.get("status") in ("validated", "approved", "applied"):
+                self.consider(sid, plan)
+                decision = copy.deepcopy(self.store.internal(sid).get("calibration_decision", {}))
         decision.pop("snapshot", None)
-        return {"decision": decision, "run": run}
+        return {"decision": decision, "run": run, "pricing": pricing}
 
     def _idle(self, session):
         if session["workflow_state"] in ("applying", "slicing", "exporting", "importing", "waiting_import") or any(r["status"] in ("queued", "running") for r in session["runs"].values()):
@@ -177,6 +194,15 @@ class Calibration:
             return self.state(sid)
 
     def command(self, sid, action, body):
+        if action == "tariffs":
+            state = self.state(sid)
+            session = self.store.internal(sid)
+            snapshot = session.get("calibration_decision", {}).get("snapshot") or session.get("intelligent_calibration", {}).get("main_snapshot") or self.bridge.call("get_print_context", {})
+            self.pricing.save(snapshot, body.get("tariffs", {}))
+            plans = [p for p in session["plans"].values() if p["status"] in ("validated", "approved", "applied")]
+            if plans:
+                self.consider(sid, max(plans, key=lambda p: p["created_at"]))
+            return self.state(sid)
         if action == "refresh":
             return self.refresh(sid, body.get("costs"))
         if action == "start":

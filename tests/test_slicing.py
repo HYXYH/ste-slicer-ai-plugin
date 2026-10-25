@@ -57,7 +57,7 @@ class SlicingTests(unittest.TestCase):
         self.app.getController.return_value.getScene.return_value = self.scene
         self.app.getMultiBuildPlateModel.return_value.activeBuildPlate = 0
         self.app.getPrintInformation.return_value = types.SimpleNamespace(
-            printTimes=lambda: {"travel": Duration(12), "print": Duration(48)}, materialLengths=[1.25, 0.5])
+            printTimes=lambda: {"travel": Duration(12), "print": Duration(48)}, materialLengths=[1.25, 0.5], materialWeights=[3.7, 1.5])
         self.failure = mock.Mock(side_effect=self.capture_failure)
         self.bridge = types.SimpleNamespace(app=self.app, store=self.store, post=self.callbacks.append,
                                             on_slice_failure=self.failure)
@@ -189,7 +189,8 @@ class SlicingTests(unittest.TestCase):
         self.assertEqual(operation["status"], "completed")
         self.assertIsNone(operation["error"])
         self.assertEqual(operation["result"], {"time": {"value": 60, "unit": "s"},
-                                               "material": {"values": [1.25, 0.5], "unit": "m"}})
+                                               "material": {"values": [1.25, 0.5], "unit": "m"},
+                                               "material_mass": {"values": [3.7, 1.5], "unit": "g"}})
         self.assertEqual(session["workflow_state"], "result_ready")
         self.assertEqual(session["events"][-1]["operation_id"], oid)
         self.assertEqual(len([event for event in session["events"] if event.get("operation_id") == oid]), 1)

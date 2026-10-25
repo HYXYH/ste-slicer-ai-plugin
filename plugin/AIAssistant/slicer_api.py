@@ -469,7 +469,8 @@ class SlicerAPI:
         self._operation(sid, oid, {"status": "stale" if stale else "completed" if success else "error",
                            "error": "Сцена изменилась" if stale else None if success else error or "Backend не подготовил G-code. Проверьте сообщения STE Slicer.",
                          "result": {"time": {"value": sum(int(v) for v in information.printTimes().values()) if information.printTimes() and all(v.valid for v in information.printTimes().values()) else None, "unit": "s"},
-                                    "material": {"values": plain(information.materialLengths), "unit": "m"}} if success else None})
+                                    "material": {"values": plain(information.materialLengths), "unit": "m"},
+                                    "material_mass": {"values": plain(getattr(information, "materialWeights", None)), "unit": "g"}} if success else None})
         def update(session):
             session["workflow_state"] = "stale" if stale else "result_ready" if success else "failed"
             session["events"].append({"id": uid(), "seq": len(session["events"]) + 1, "session_id": sid,

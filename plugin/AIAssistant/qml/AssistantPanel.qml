@@ -36,7 +36,7 @@ Rectangle {
     }
     onVChanged: {
         if (modal === "settings" && settingsVersion !== v.configVersion) fillSettings();
-        if (v.prompt && v.prompt.kind && !v.chats && !v.analytics) { promptInput.text = ""; modal = "prompt"; }
+        if (v.prompt && v.prompt.kind && !v.chats && !v.analytics && !v.knowledge) { promptInput.text = ""; modal = "prompt"; }
         tailTimer.restart();
     }
     Connections {
@@ -46,7 +46,7 @@ Rectangle {
     Timer { id: tailTimer; interval: 20; onTriggered: if (root.followTail) conversation.contentY = Math.max(0, conversation.contentHeight - conversation.height); }
     DropArea {
         anchors.fill: parent
-        enabled: !root.v.analytics && !root.v.chats && !root.v.busy
+        enabled: !root.v.analytics && !root.v.chats && !root.v.knowledge && !root.v.busy
         onDropped: if (drop.hasUrls && root.backend) root.backend.uploadUrls(drop.urls)
     }
     ColumnLayout {
@@ -55,12 +55,12 @@ Rectangle {
         spacing: 12
         Item {
             Layout.fillWidth: true
-            implicitHeight: root.v.chats || root.v.analytics ? 48 : Math.max(64, chatHeading.height + 8)
+            implicitHeight: root.v.chats || root.v.analytics || root.v.knowledge ? 48 : Math.max(64, chatHeading.height + 8)
             Image { id:headerRobot; source:"Robot.svg"; width:45; height:45; anchors.left:parent.left; anchors.leftMargin:(root.navigationWidth - width) / 2; anchors.verticalCenter:parent.verticalCenter }
-            Text { visible:!!root.v.chats || !!root.v.analytics; anchors.left:parent.left; anchors.leftMargin:root.navigationWidth + 12; anchors.verticalCenter:parent.verticalCenter; text:root.v.chats ? "Все чаты" : "Аналитика подготовки"; color:"#123858"; font.family:"Segoe UI"; font.pixelSize:root.v.chats ? 30 : 20; font.bold:true }
+            Text { visible:!!root.v.chats || !!root.v.analytics || !!root.v.knowledge; anchors.left:parent.left; anchors.leftMargin:root.navigationWidth + 12; anchors.verticalCenter:parent.verticalCenter; text:root.v.chats ? "Все чаты" : root.v.knowledge ? "База знаний" : "Аналитика подготовки"; color:"#123858"; font.family:"Segoe UI"; font.pixelSize:root.v.chats ? 30 : 20; font.bold:true }
             Column {
                 id:chatHeading
-                visible:!root.v.chats && !root.v.analytics
+                visible:!root.v.chats && !root.v.analytics && !root.v.knowledge
                 anchors.centerIn:parent; width:Math.max(120,parent.width - (root.width < 850 ? 230 : 120)); spacing:6
                 Item {
                     width:parent.width; height:root.editingTitleSession && root.editingTitleSession === root.v.sessionId ? 36 : titleRow.height
@@ -97,7 +97,7 @@ Rectangle {
                     text:'<font color="' + (root.v.state === "failed" ? "#dd715b" : root.v.active ? "#168bd1" : root.v.state === "waiting_user" ? "#e8aa32" : "#40b987") + '">●</font> ' + (root.v.status || "Подключение…") + (root.v.updatedAt ? " · Последнее изменение: " + Qt.formatDateTime(new Date(root.v.updatedAt),"dd.MM.yyyy, HH:mm") : "")
                 }
             }
-            AssistantButton { anchors.right:parent.right; anchors.verticalCenter:parent.verticalCenter; visible: root.width < 850 && !root.v.analytics && !root.v.chats; text: root.details ? "Чат" : "Параметры"; onClicked: root.details = !root.details }
+            AssistantButton { anchors.right:parent.right; anchors.verticalCenter:parent.verticalCenter; visible: root.width < 850 && !root.v.analytics && !root.v.chats && !root.v.knowledge; text: root.details ? "Чат" : "Параметры"; onClicked: root.details = !root.details }
         }
         Rectangle {
             visible: (root.v.notice || "") !== ""
@@ -116,7 +116,7 @@ Rectangle {
                     anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 12
                     spacing: 12
                     Repeater {
-                        model: [{title:"Новый чат",icon:"NewChat.svg",action:"new"}, {title:root.v.chats ? "Назад" : "Все чаты",icon:root.v.chats ? "Back.svg" : "Chats.svg",action:"chats"}, {title:"LLM",icon:"Settings.svg",action:"settings"}, {title:"Опыт печати",icon:"Cube.svg",action:"experience"}, {title:root.v.analytics ? "Назад" : "Аналитика",icon:root.v.analytics ? "Back.svg" : "Analytics.svg",action:"analytics"}]
+                        model: [{title:"Новый чат",icon:"NewChat.svg",action:"new"}, {title:root.v.chats ? "Назад" : "Все чаты",icon:root.v.chats ? "Back.svg" : "Chats.svg",action:"chats"}, {title:"LLM",icon:"Settings.svg",action:"settings"}, {title:root.v.knowledge ? "Назад" : "База знаний",icon:root.v.knowledge ? "Back.svg" : "Book.svg",action:"experience"}, {title:root.v.analytics ? "Назад" : "Аналитика",icon:root.v.analytics ? "Back.svg" : "Analytics.svg",action:"analytics"}]
                         AssistantNavButton {
                             width: parent.width
                             text: modelData.title
@@ -125,7 +125,7 @@ Rectangle {
                                 if (modelData.action === "new") { root.modal=""; root.act("newChat"); }
                                 else if (modelData.action === "chats") { root.modal=""; root.v.chats ? root.act("closeChats") : root.act("showChats"); }
                                 else if (modelData.action === "settings") { root.modal="settings"; root.fillSettings(); root.act("loadSettings"); }
-                                else if (modelData.action === "experience") { root.modal=""; root.act("showPrintExperience"); }
+                                else if (modelData.action === "experience") { root.modal=""; root.v.knowledge ? root.act("chat") : root.act("showPrintExperience"); }
                                 else if (root.v.analytics) root.act("chat");
                                 else if (root.backend) root.backend.loadAnalytics(30);
                             }
@@ -136,7 +136,7 @@ Rectangle {
             Item {
                 Layout.fillWidth:true; Layout.fillHeight:true
                 RowLayout {
-                    anchors.fill:parent; visible:!root.v.analytics && !root.v.chats; spacing:12
+                    anchors.fill:parent; visible:!root.v.analytics && !root.v.chats && !root.v.knowledge; spacing:12
             ColumnLayout {
                 visible: root.width >= 850 || !root.details
                 Layout.fillWidth: true; Layout.fillHeight: true
@@ -373,6 +373,7 @@ Rectangle {
                         AssistantButton { visible:!!root.v.cubePlanNeeded; Layout.fillWidth:true; text:"Подготовить план куба"; primary:true; enabled:!!root.v.cubeModelReady && !!root.assessment.process_signature && !root.v.busy; onClicked:root.act("analyze") }
                         AssistantButton { Layout.fillWidth:true; text:"✓  Применить и рассчитать"; primary:true; enabled:!!root.v.planId && !root.v.busy && root.assessment.status !== "conflict"; onClicked:root.act("applyPlan") }
                         AssistantButton { visible:root.assessment.recommend_calibration === true; Layout.fillWidth:true; text:"Провести калибровку"; primary:true; enabled:!!root.assessment.process_signature; onClicked:root.modal = "calibration" }
+                        AssistantButton { Layout.fillWidth:true; text:"i  Как работает калибровка"; compact:true; onClicked:root.modal="calibrationInfo" }
                         AssistantButton { visible:!!(root.v.calibrationFor || {}).session_id; Layout.fillWidth:true; text:"Ввести измерения куба"; onClicked:root.modal = "measurements" }
                         AssistantButton { visible:!!(root.v.calibrationFor || {}).session_id; Layout.fillWidth:true; text:"Вернуться к детали"; compact:true; onClicked:root.backend.select(root.v.calibrationFor.session_id) }
                         Text { visible:root.assessment.recommend_calibration === true; Layout.fillWidth:true; text:root.assessment.process_signature ? "Куб 20 мм проверяет размеры и качество печати. Условия эксплуатации и противоречия ТЗ нужно уточнить отдельно." : "Для калибровки выберите принтер, материал и совместимый профиль."; wrapMode:Text.Wrap; color:"#8b9dab"; font.pixelSize:10 }
@@ -389,6 +390,10 @@ Rectangle {
             anchors.fill:parent; visible:!!root.v.chats
             backend:root.backend; sessions:root.v.sessions || []; currentId:root.v.sessionId || ""
             onDeleteRequested: { root.deleteChatId=sessionId; root.deleteChatTitle=title; root.modal="deleteChat"; }
+        }
+        AssistantKnowledgeView {
+            anchors.fill:parent; visible:!!root.v.knowledge
+            backend:root.backend; viewState:root.v
         }
         AssistantAnalyticsView {
             anchors.fill:parent; visible:!!root.v.analytics
@@ -416,7 +421,7 @@ Rectangle {
                     onWidthChanged:fitWidths()
                     onChildrenChanged:fitWidths()
                     Component.onCompleted:fitWidths()
-                    RowLayout { Layout.fillWidth:true; Text { Layout.fillWidth:true; text:({deleteChat:"Удалить чат?",settings:"Подключение LLM",prompt:(root.v.prompt || {}).title,assessment:"Условия эксплуатации",calibration:"Калибровочный куб",measurements:"Измерения после ручной печати"})[root.modal] || ""; wrapMode:Text.Wrap; color:"#1b4566"; font.pixelSize:18; font.bold:true } AssistantButton { text:"Закрыть"; compact:true; onClicked: { root.modal=""; secret.text=""; root.act("dismissPrompt"); } } }
+                    RowLayout { Layout.fillWidth:true; Text { Layout.fillWidth:true; text:({deleteChat:"Удалить чат?",settings:"Подключение LLM",prompt:(root.v.prompt || {}).title,assessment:"Условия эксплуатации",calibration:"Калибровочный куб",calibrationInfo:"Как работает калибровка",measurements:"Измерения после ручной печати"})[root.modal] || ""; wrapMode:Text.Wrap; color:"#1b4566"; font.pixelSize:18; font.bold:true } AssistantButton { text:"Закрыть"; compact:true; onClicked: { root.modal=""; secret.text=""; root.act("dismissPrompt"); } } }
                     ColumnLayout {
                         visible:root.modal === "deleteChat"; Layout.fillWidth:true; spacing:12
                         Text { Layout.fillWidth:true; text:root.deleteChatTitle; textFormat:Text.PlainText; wrapMode:Text.Wrap; font.bold:true; color:"#36556e" }
@@ -454,6 +459,18 @@ Rectangle {
                         Text { id:assessmentQuestion; Layout.fillWidth:true; wrapMode:Text.Wrap; color:"#54748d" }
                         TextField { id:assessmentValue; Layout.fillWidth:true; placeholderText:"Ответ, единицы или «не применяется»" }
                         AssistantButton { text:"Сохранить ответ"; primary:true; onClicked: { root.backend.answerAssessment(assessmentField.text,assessmentValue.text); root.modal=""; } }
+                    }
+                    Column {
+                        visible:root.modal === "calibrationInfo"; spacing:12
+                        Repeater {
+                            model:root.v.calibrationInfo || []
+                            Column {
+                                width:forms.width; spacing:6
+                                Text { width:parent.width; text:modelData.title + " · " + modelData.state; textFormat:Text.PlainText; wrapMode:Text.Wrap; font.bold:true; font.pixelSize:13; color:"#315f84" }
+                                Text { width:parent.width; text:modelData.text; textFormat:Text.PlainText; wrapMode:Text.Wrap; font.pixelSize:12; color:"#6d88a1" }
+                            }
+                        }
+                        AssistantButton { text:"Открыть раздел «Калибровка»"; onClicked: { root.modal=""; root.act("showCalibrationInfo"); } }
                     }
                     ColumnLayout {
                         visible:root.modal === "calibration"; Layout.fillWidth:true

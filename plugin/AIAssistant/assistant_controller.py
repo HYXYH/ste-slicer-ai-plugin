@@ -12,6 +12,7 @@ from .native_window import LocalClient, AssistantWindow, request_id
 from .native_view import FLOW, TOOLS, SETTINGS, session_document, analytics_document, human
 from .user_view import field_label
 from .analytics_view import analytics_projection
+from .knowledge_base import CALIBRATION
 
 PARAMETERS = {key: label for key, (label, unit) in SETTINGS.items()}
 
@@ -63,6 +64,11 @@ class AssistantController(QObject):
         self.drafts, self.busy, self.pending = {}, set(), set()
         self.message, self.prompt, self.actions = "", None, {}
         self.history, self.analytics_mode, self.disposed = False, False, False
+        self.knowledge_mode, self.knowledge_loading = False, False
+        self.knowledge_data, self.knowledge_view, self.knowledge_issue = {}, {}, ""
+        self.knowledge_request = 0
+        self.knowledge_options = {"tab": "conclusions", "selection": "", "search": "", "printer": "all", "material": "all",
+                                  "status": "all", "type": "all", "category": "all", "group_by": "none"}
         self.chats_mode, self.chats_return_id = False, None
         self.expanded_activity = set()
         self.expanded_requirements = set()
@@ -136,6 +142,7 @@ class AssistantController(QObject):
         self.receive_progress({})
         self.assessment, self.prompt = {}, None
         self.analytics_mode, self.chats_mode, self.history = False, False, False
+        self.knowledge_mode = False
         self.last_assessment = 0
         self.draftChanged.emit()
         self.update_buttons()
@@ -167,7 +174,7 @@ class AssistantController(QObject):
             sid = self.current
             routes.append((self.path(sid) + "/workspace", self.receive_session))
             changing = (self.session or {}).get("workflow_state") in ("applying", "slicing", "exporting", "importing", "waiting_import")
-            if not changing and not self.analytics_mode and not self.chats_mode and time.monotonic() - self.last_assessment > 10:
+            if not changing and not self.analytics_mode and not self.chats_mode and not self.knowledge_mode and time.monotonic() - self.last_assessment > 10:
                 routes.append((self.path(sid) + "/assessment", lambda value, sid=sid: self.receive_assessment(sid, value)))
         if self.analytics_mode and time.monotonic() - self.last_report > 10:
             self.loadAnalytics(self.days)
@@ -243,6 +250,9 @@ class AssistantController(QObject):
                       "notice": self.message, "context": {k: v for k, v in self.context.items() if k != "updated_at"}, "params": params,
                       "planId": actionable_plan["id"] if actionable_plan else "", "planVersion": actionable_plan["version"] if actionable_plan else 0,
                       "assessment": self.assessment, "analytics": self.analytics_mode, "chats": self.chats_mode, "report": report,
+                      "knowledge": self.knowledge_mode, "knowledgeData": self.knowledge_view, "knowledgeOptions": dict(self.knowledge_options),
+                      "knowledgeLoading": self.knowledge_loading, "knowledgeIssue": self.knowledge_issue,
+                      "calibrationInfo": CALIBRATION,
                       "analyticsData": analytics_projection(self.report, self.report_search, self.report_filter, self.report_issue),
                       "analyticsFilter": self.report_filter, "analyticsSearch": self.report_search, "analyticsDays": self.days, "analyticsIssue": self.report_issue,
                       "calibrationFor": session.get("calibration_for", {}), "config": self.config, "configVersion": self.config_version, "prompt": self.prompt or {}}
@@ -268,10 +278,76 @@ class AssistantController(QObject):
 
     @pyqtSlot()
     def showPrintExperience(self):
-        def show(data):
-            from .feedback_dialog import show_library
-            show_library(self, data)
-        self.client.call("/api/experience", show)
+        self.knowledge_mode, self.analytics_mode, self.chats_mode = True, False, False
+        self.prompt = None
+        self.loadKnowledge()
+
+    def project_knowledge(self):
+        from .knowledge_view import projection
+        self.knowledge_view = projection(self.knowledge_data, self.knowledge_options)
+        self.update_buttons()
+
+    def receive_knowledge(self, data):
+        for item in data.get("prints", []):
+            for observation in item["observations"]:
+                for photo in observation["data"].get("photos", []):
+                    name = photo["id"]
+                    if os.path.basename(name) == name and name.lower().endswith((".jpg", ".jpeg", ".png")):
+                        photo["url"] = QUrl.fromLocalFile(os.path.join(self.server.print_feedback.db.root, name)).toString()
+        self.knowledge_data = data
+        self.project_knowledge()
+
+    @pyqtSlot()
+    def loadKnowledge(self):
+        self.knowledge_request += 1
+        request = self.knowledge_request
+        self.knowledge_loading, self.knowledge_issue = True, ""
+        def loaded(data):
+            if request != self.knowledge_request:
+                return
+            self.knowledge_loading = False
+            self.receive_knowledge(data)
+        def failed(error):
+            if request == self.knowledge_request:
+                self.knowledge_loading, self.knowledge_issue = False, error
+                self.update_buttons()
+        self.client.call("/api/knowledge", loaded, failure=failed)
+        self.update_buttons()
+
+    @pyqtSlot(str)
+    def knowledgeTab(self, tab):
+        if tab not in ("conclusions", "prints", "defects", "calibration"):
+            return
+        self.knowledge_options.update(tab=tab, selection="", search="", printer="all", material="all", status="all", type="all", category="all", group_by="none")
+        self.project_knowledge()
+
+    @pyqtSlot(str, str)
+    def filterKnowledge(self, key, value):
+        if key in ("search", "printer", "material", "status", "type", "category", "group_by"):
+            self.knowledge_options[key] = value[:200]
+            self.project_knowledge()
+
+    @pyqtSlot(str, str)
+    def selectKnowledgeItem(self, tab, identifier):
+        if tab not in ("conclusions", "prints", "defects"):
+            return
+        if self.knowledge_options["tab"] != tab:
+            self.knowledge_options.update(search="", printer="all", material="all", status="all", type="all", category="all")
+        self.knowledge_options.update(tab=tab, selection=identifier)
+        self.project_knowledge()
+
+    @pyqtSlot(str, 'QVariantMap')
+    def reviseKnowledgeObservation(self, identifier, body):
+        self.knowledge_issue = ""
+        def failed(error):
+            self.knowledge_issue = error
+            self.update_buttons()
+        self.client.call("/api/knowledge/observations/" + quote(identifier, safe=""), self.receive_knowledge, "PATCH", dict(body), failed)
+
+    @pyqtSlot()
+    def showCalibrationInfo(self):
+        self.knowledge_options.update(tab="calibration", selection="")
+        self.showPrintExperience()
 
     @pyqtSlot(str)
     def rename(self, title):
@@ -279,6 +355,7 @@ class AssistantController(QObject):
 
     @pyqtSlot()
     def showChats(self):
+        self.knowledge_mode = False
         self.chats_return_id = self.current
         self.chats_mode, self.analytics_mode = True, False
         self.client.call("/api/sessions", self.receive_listing)
@@ -548,6 +625,7 @@ class AssistantController(QObject):
 
     @pyqtSlot(int)
     def loadAnalytics(self, days=30):
+        self.knowledge_mode = False
         self.chats_mode = False
         self.analytics_mode, self.days = True, days
         def loaded(report):
@@ -561,6 +639,7 @@ class AssistantController(QObject):
 
     @pyqtSlot()
     def chat(self):
+        self.knowledge_mode = False
         self.analytics_mode = False
         self.chats_mode = False
         self.update_buttons()

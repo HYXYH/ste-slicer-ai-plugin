@@ -77,6 +77,7 @@ class PrintFeedback:
                 shutil.copyfile(attachment["path"], destination)
             photos.append({"id": photo_id, "name": attachment["name"]})
         data = {"kind": "user_observation", "result": body["result"], "text": text(body["text"]), "defects": defects,
+                "print_kind": "calibration" if session.get("calibration_for") else "ordinary",
                 "reported_defects": body["defects"], "inferred_defects": [k for k in defects if k not in body["defects"]],
                 "answers": answers, "measurements": measures, "photos": photos, "printed": True}
         with self.lock:
@@ -107,6 +108,8 @@ class PrintFeedback:
                            "external_checked": {"type": "boolean"}}, ["defect", "choice", "external_checked"]))
         item = self.owned(sid, pid)
         observation = item["observations"][-1]
+        if observation.get("excluded"):
+            raise ApiError("Наблюдение исключено. Уточните или восстановите его в базе знаний", 409)
         if body["defect"] not in observation["data"]["defects"]:
             raise ApiError("Сначала сохраните наблюдение об этом дефекте")
         choice = DEFECTS[body["defect"]]["choices"][int(body["choice"])]
@@ -214,7 +217,7 @@ class PrintFeedback:
                 except Exception:
                     self.db.update_adjustment(aid, {"state": "unknown", "error": "Проверьте фактические настройки: исход операции не подтверждён"})
                     raise
-                result = self.db.update_adjustment(aid, {"state": "rolled_back" if rollback else "applied", "applied_snapshot": applied,
+                result = self.db.update_adjustment(aid, {"state": "rolled_back" if rollback else "applied", "rollback_snapshot" if rollback else "applied_snapshot": applied,
                                                         "applied_at": now()}, "rejected" if rollback else None)
                 def stale(session):
                     for plan in session["plans"].values():
@@ -274,11 +277,13 @@ class PrintFeedback:
             if conditions(repeated["snapshot"]) is None or conditions(repeated["snapshot"]) != conditions(data["applied_snapshot"]):
                 raise ApiError("Повторная печать выполнена в других условиях; эффект одного изменения не подтверждён", 409)
             report = repeated["observations"][-1]["data"]
+            if repeated["observations"][-1].get("excluded"):
+                raise ApiError("Наблюдение повторной печати исключено из базы знаний", 409)
             if body["outcome"] in ("resolved", "better", "worse", "unchanged") and report["result"] in ("unknown", "not_checked"):
                 raise ApiError("Сначала осмотрите повторную печать и уточните её результат")
             if body["outcome"] == "resolved" and (report["result"] in ("unknown", "not_checked") or data["defect"] in report["defects"]):
                 raise ApiError("Наблюдения не подтверждают исчезновение дефекта")
-            degree = {"resolved": "confirmed", "better": "supported", "worse": "rejected", "unchanged": "rejected"}.get(body["outcome"], "hypothesis")
+            degree = {"resolved": "observation", "better": "supported", "worse": "rejected", "unchanged": "rejected"}.get(body["outcome"], "hypothesis")
             result = self.db.update_adjustment(aid, dict(body, state="applied" if body["outcome"] in ("unknown", "not_checked") else "evaluated", evaluated_at=now()), degree)
             self.note(sid, "Результат проверки: " + {"resolved": "дефект исчез", "better": "стало лучше", "worse": "стало хуже", "unchanged": "без изменений", "unknown": "не могу определить", "not_checked": "не проверялось"}[body["outcome"]] +
                       (". Предлагаю вернуть исходное значение и проверить другую причину; откат требует согласия." if degree == "rejected" else ". Наблюдение сохранено вместе с условиями печати."))

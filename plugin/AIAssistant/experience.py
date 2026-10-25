@@ -55,7 +55,11 @@ class ExperienceStore:
                 CREATE TABLE IF NOT EXISTS lessons (id TEXT PRIMARY KEY, adjustment_id TEXT NOT NULL UNIQUE REFERENCES adjustments(id),
                     created_at TEXT NOT NULL, degree TEXT NOT NULL, conditions TEXT NOT NULL, data TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS print_sessions ON prints(session_id, created_at);
-                PRAGMA user_version=1;
+                CREATE TABLE IF NOT EXISTS observation_revisions (id TEXT PRIMARY KEY,
+                    observation_id TEXT NOT NULL REFERENCES observations(id), created_at TEXT NOT NULL,
+                    data TEXT NOT NULL, excluded INTEGER NOT NULL, reason TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS observation_revision_lookup ON observation_revisions(observation_id, created_at);
+                PRAGMA user_version=2;
             """)
 
     @contextmanager
@@ -78,7 +82,23 @@ class ExperienceStore:
         for table in ("observations", "adjustments"):
             item[table] = [dict(dict(r), data=json.loads(r["data"])) for r in db.execute(
                 "SELECT * FROM " + table + " WHERE print_id=? ORDER BY created_at, rowid", (pid,))]
+        for observation in item["observations"]:
+            revisions = [dict(dict(r), data=json.loads(r["data"])) for r in db.execute(
+                "SELECT * FROM observation_revisions WHERE observation_id=? ORDER BY created_at, rowid", (observation["id"],))]
+            observation["original_data"] = copy.deepcopy(observation["data"])
+            observation["revisions"], observation["excluded"] = revisions, False
+            if revisions:
+                observation.update(data=revisions[-1]["data"], excluded=bool(revisions[-1]["excluded"]))
         return item
+
+    def revise_observation(self, observation_id, data, excluded, reason):
+        with self.lock, self.connect() as db:
+            row = db.execute("SELECT print_id FROM observations WHERE id=?", (observation_id,)).fetchone()
+            if not row:
+                raise ApiError("Наблюдение не найдено", 404)
+            db.execute("INSERT INTO observation_revisions VALUES (?,?,?,?,?,?)",
+                       (uid(), observation_id, now(), encode(data), int(excluded), reason))
+            return self._read(db, row["print_id"])
 
     def get(self, pid):
         with self.lock, self.connect() as db:
@@ -97,7 +117,7 @@ class ExperienceStore:
                 raise ApiError("Печать для дополнения не найдена", 404)
             pid = row["id"] if row else uid()
             if not row:
-                db.execute("INSERT INTO prints VALUES (?,?,?,?,?)", (pid, sid, operation["id"], now(), encode(operation["print_snapshot"])))
+                db.execute("INSERT INTO prints VALUES (?,?,?,?,?)", (pid, sid, operation["id"], operation.get("printed_at") or now(), encode(operation["print_snapshot"])))
             db.execute("INSERT INTO observations VALUES (?,?,?,?,?)", (uid(), pid, request_id, now(), encode(data)))
             return self._read(db, pid)
 
@@ -135,11 +155,15 @@ class ExperienceStore:
 
     def library(self, sid=None, limit=100):
         with self.lock, self.connect() as db:
+            params = (sid,) if sid else ()
+            if limit is not None:
+                params += (limit,)
             rows = db.execute("SELECT id FROM prints" + (" WHERE session_id=?" if sid else "") +
-                              " ORDER BY created_at DESC, rowid DESC LIMIT ?", (sid, limit) if sid else (limit,)).fetchall()
+                              " ORDER BY created_at DESC, rowid DESC" + (" LIMIT ?" if limit is not None else ""), params).fetchall()
             prints = [self._read(db, row["id"]) for row in rows]
             lessons = [dict(dict(r), conditions=json.loads(r["conditions"]), data=json.loads(r["data"]))
-                       for r in db.execute("SELECT * FROM lessons ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,))]
+                       for r in db.execute("SELECT * FROM lessons ORDER BY created_at DESC, rowid DESC" +
+                                           (" LIMIT ?" if limit is not None else ""), (limit,) if limit is not None else ())]
             return {"prints": prints, "lessons": lessons}
 
     def find(self, snapshot):
@@ -147,23 +171,29 @@ class ExperienceStore:
         current = conditions(snapshot)
         if current is None or not current["mode"] or not current["objects"]:
             return {"observations": [], "lessons": []}
-        library = self.library()
-        observations = [{"print_id": p["id"], "observations": p["observations"]} for p in library["prints"]
-                        if conditions(p["snapshot"]) == current][:10]
+        from .knowledge_base import derive_conclusions, knowledge_conditions, effective_report
+        scope = knowledge_conditions(snapshot)
+        if scope is None:
+            return {"observations": [], "lessons": []}
+        library = self.library(limit=None)
+        conclusions = derive_conclusions(library)
+        eligible = {member for conclusion in conclusions if conclusion["type"] == "correction" and
+                    conclusion["status"] == "confirmed" for member in conclusion["verified_lesson_ids"]}
+        observations = [{"print_id": p["id"], "observations": [effective_report(p)]} for p in library["prints"]
+                        if effective_report(p) is not None and knowledge_conditions(p["snapshot"]) == scope][:10]
+        prints = {p["id"]: p for p in library["prints"]}
         lessons = []
         for row in library["lessons"]:
             data = row["data"]
-            candidate = conditions(snapshot, data["key"])
-            verified = conditions(data.get("applied_snapshot") or {}, data["key"])
-            if row["degree"] != "confirmed" or row["conditions"] is None or candidate not in (row["conditions"], verified):
+            original = prints.get(data.get("print_id"), {})
+            candidate = knowledge_conditions(snapshot, data["key"], data.get("defect"))
+            verified = knowledge_conditions(data.get("applied_snapshot") or {}, data["key"], data.get("defect"))
+            baseline = knowledge_conditions(original.get("snapshot", {}), data["key"], data.get("defect"))
+            if row["id"] not in eligible or baseline is None or candidate not in (baseline, verified):
                 continue
             if setting(snapshot, data["key"], data["target"]) not in (data["before"], data["after"]):
                 continue
-            if any(other["degree"] == "rejected" and other["created_at"] > row["created_at"] and
-                   other["data"]["key"] == data["key"] and other["data"]["target"] == data["target"] and
-                   other["data"]["after"] == data["after"] and other["conditions"] == row["conditions"] for other in library["lessons"]):
-                continue
-            lessons.append(row)
+            lessons.append(dict(row, degree="confirmed"))
         # Disagreeing verified trials are evidence of uncertainty, never last-write-wins recipes.
         conflicts = set((r["data"]["key"], encode(r["data"]["target"])) for r in lessons
                         if len(set(encode(x["data"]["after"]) for x in lessons if x["data"]["key"] == r["data"]["key"] and x["data"]["target"] == r["data"]["target"])) > 1)
@@ -178,7 +208,7 @@ def reuse(result, evidence):
         data = lesson["data"]
         result["settings"] = [s for s in result["settings"] if s["key"] != data["key"]]
         result["settings"].append({"key": data["key"], "value": data["after"], "unit": data.get("unit"),
-                                   "target": data["target"], "reason": "Подтверждено повторной печатью: " + data["reason"],
+                                   "target": data["target"], "reason": "Подтверждено независимыми проверками: " + data["reason"],
                                    "source": lesson["id"]})
         result["source_ids"].append(lesson["id"])
     for observation in evidence.get("observations", []):

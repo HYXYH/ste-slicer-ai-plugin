@@ -47,6 +47,8 @@ class LocalServer(ThreadingMixIn, HTTPServer):
         self.plans = Plans(self)
         from .print_feedback import PrintFeedback
         self.print_feedback = PrintFeedback(self)
+        from .knowledge_base import KnowledgeBase
+        self.knowledge_base = KnowledgeBase(store, self.print_feedback.db)
         self.tools.experience = self.print_feedback.db
         self.tools.authorize_change = self.plans.authorize
         self.runner = Runner(self)
@@ -288,6 +290,12 @@ class Handler(BaseHTTPRequestHandler):
         from .agent.contracts import validate, obj, ID
         from .session import uid
         server, store = self.server, self.server.store
+        if path == "/api/knowledge" and method == "GET":
+            return server.knowledge_base.snapshot(), 200
+        knowledge_parts = path.strip("/").split("/")
+        if len(knowledge_parts) == 4 and knowledge_parts[:3] == ["api", "knowledge", "observations"] and method == "PATCH":
+            validate(knowledge_parts[3], ID)
+            return server.knowledge_base.revise(knowledge_parts[3], self._json()), 200
         if path == "/api/experience" and method == "GET":
             return server.print_feedback.db.library(), 200
         feedback_parts = path.strip("/").split("/")

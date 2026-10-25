@@ -1,5 +1,7 @@
 """Symptom-led alternatives from kalibrovka_nastroiki_printera.md, never a batch recipe."""
 import re
+import json
+import os
 
 # Each choice is an observation to verify, followed by one possible experiment.
 # None means a manual check: printer-specific signs and mechanics must not be guessed.
@@ -80,11 +82,15 @@ ROWS = [
 DEFECTS = {row[0]: {"id": row[0], "group": row[1], "label": row[2], "pattern": row[3],
                      "choices": [{"id": str(i), "symptom": a[0], "key": a[1], "direction": a[2], "reason": a[3]}
                                  for i, a in enumerate(row[4])]} for row in ROWS}
+_catalog_path = os.path.join(os.path.dirname(__file__), "defects", "catalog.json")
+if os.path.isfile(_catalog_path):
+    with open(_catalog_path, encoding="utf-8") as _source:
+        DEFECTS.update({item["id"]: item for item in json.load(_source)})
 EXTERNAL = "До изменения настроек проверьте сухость пластика, чистоту стола, отсутствие засора, стабильность подачи и механику. Настройки не устраняют эти причины."
 
 
 def catalog():
-    return [{k: row[k] for k in ("id", "group", "label", "choices")} for row in (DEFECTS[r[0]] for r in ROWS)]
+    return [dict(DEFECTS[r[0]]) for r in ROWS]
 
 
 def detect(text):

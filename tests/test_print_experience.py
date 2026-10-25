@@ -79,11 +79,15 @@ class PrintExperienceTests(unittest.TestCase):
         return result["adjustment"]
 
     def confirmed(self, outcome="resolved"):
-        trial = self.proposal()
-        self.feedback.apply(self.sid, trial["id"], True)
-        self.add_operation("repeat")
-        result = self.report("repeat", "good" if outcome == "resolved" else "defects")
-        return self.feedback.evaluate(self.sid, trial["id"], {"repeat_print_id": result["print"]["id"], "outcome": outcome})
+        for index in range(2 if outcome == "resolved" else 1):
+            self.values["material_print_temperature"] = 210
+            self.add_operation("first")
+            trial = self.proposal()
+            self.feedback.apply(self.sid, trial["id"], True)
+            self.add_operation("repeat")
+            result = self.report("repeat", "good" if outcome == "resolved" else "defects")
+            verified = self.feedback.evaluate(self.sid, trial["id"], {"repeat_print_id": result["print"]["id"], "outcome": outcome})
+        return verified
 
     def test_facts_saved_idempotently_with_original_slice_snapshot_and_reopened(self):
         self.values["material_print_temperature"] = 230
@@ -122,12 +126,12 @@ class PrintExperienceTests(unittest.TestCase):
 
     def test_one_change_verified_on_repeat_and_reused_after_restart(self):
         trial = self.confirmed()
-        self.assertEqual(len(self.bridge.mutations), 1)
+        self.assertEqual(len(self.bridge.mutations), 2)
         self.assertEqual(len(self.bridge.mutations[0]["changes"]), 1)
         self.assertEqual(self.values["material_print_temperature"], 205)
         self.values["material_print_temperature"] = 210
         evidence = ExperienceStore(self.store.root).find(self.snapshot())
-        self.assertEqual(len(evidence["lessons"]), 1)
+        self.assertEqual(len(evidence["lessons"]), 2)
         result = reuse({"settings": [], "warnings": [], "source_ids": []}, evidence)
         self.assertEqual(result["settings"][0]["value"], 205)
         self.assertEqual(result["settings"][0]["target"], self.target)
@@ -162,7 +166,7 @@ class PrintExperienceTests(unittest.TestCase):
                        lambda s: s["context"]["extruders"][0].update(nozzle_mm=.6),
                        lambda s: s["context"]["mode"].update(id="cylindrical"),
                        lambda s: s["context"]["printer"].update(id="other"),
-                       lambda s: s["objects"][0].update(geometry_revision="other-model"),
+                       lambda s: s["objects"][0].update(dimensions_mm=[200, 20, 2]),
                        lambda s: s["settings"][0]["values"].update(speed_print=200)):
             candidate = copy.deepcopy(original)
             mutate(candidate)
@@ -209,6 +213,14 @@ class PrintExperienceTests(unittest.TestCase):
         self.add_operation("repeat")
         repeated = self.report("repeat", "good")["print"]
         self.feedback.evaluate(self.sid, trial["id"], {"repeat_print_id": repeated["id"], "outcome": "resolved"})
+        self.values["speed_layer_0"] = 20
+        self.add_operation("second-baseline")
+        second = self.report("second-baseline", defects=["adhesion"])["print"]
+        trial2 = self.feedback.propose(self.sid, second["id"], {"defect": "adhesion", "choice": "1", "external_checked": True})["adjustment"]
+        self.feedback.apply(self.sid, trial2["id"], True)
+        self.add_operation("second-repeat")
+        repeated2 = self.report("second-repeat", "good")["print"]
+        self.feedback.evaluate(self.sid, trial2["id"], {"repeat_print_id": repeated2["id"], "outcome": "resolved"})
         result = recommend("PLA, декоративная модель", self.bridge.snapshot(), experience=lambda result: reuse(
             result, self.db.find(proposed_snapshot(self.snapshot(), result))))
         self.assertEqual(next(s["value"] for s in result["settings"] if s["key"] == "speed_layer_0"), 18)

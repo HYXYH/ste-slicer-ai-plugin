@@ -283,6 +283,10 @@ class Workspace:
         if not body["process_signature"] or body["process_signature"] != session["calibration_process"] or body["process_signature"] != process.get("signature"):
             raise ApiError("Настройки изменились после подготовки куба. Создайте новую калибровку", 409, "STALE_INPUT")
         record = dict(body, id=uid(), created_at=now(), version=VERSION)
+        slices = [o for o in session["operations"].values() if o.get("kind") == "slice" and o["status"] == "completed" and o.get("print_snapshot")]
+        if slices:
+            printed_slice = max(slices, key=lambda o: o.get("created_at", ""))
+            record.update(operation_id=printed_slice["id"], print_snapshot=copy.deepcopy(printed_slice["print_snapshot"]))
         self.store.edit(sid, lambda s: s.setdefault("calibration_results", []).append(record))
         return record
 

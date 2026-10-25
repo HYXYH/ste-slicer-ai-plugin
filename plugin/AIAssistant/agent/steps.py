@@ -48,14 +48,17 @@ def is_step(question):
 
 
 class Steps:
-    def __init__(self, complete, rejected, progress, experience=None):
+    def __init__(self, complete, rejected, progress, experience=None, images=None):
         self.complete, self.rejected, self.progress = complete, rejected, progress
         self.experience = experience
+        self.images = images or []
 
     def ask(self, prompt, payload, schema, phase):
         """Two bounded attempts; None lets the caller use its reference fallback."""
         messages = [{"role": "system", "content": STEP_SYSTEM + "\n" + prompt},
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}]
+        if self.images:
+            messages[-1]["content"] = [{"type": "text", "text": messages[-1]["content"]}] + self.images
         for attempt in range(2):
             response = self.complete(messages, structured=schema)
             try:
@@ -85,7 +88,7 @@ class Steps:
         payloads = {v["message_id"]: v["payload"] for v in session["workflow_requests"].values()
                     if isinstance(v, dict) and "payload" in v and "message_id" in v}
         parts, refs = [session["task"].get("description") or ""], []
-        for message in [m for m in session["messages"] if m["role"] == "user"]:
+        for message in [m for m in session["messages"] if m["role"] == "user" and not m.get("calibration_message")]:
             payload = payloads.get(message["id"])
             if payload is None:
                 text = message_text(session, message)

@@ -1,0 +1,15 @@
+{
+  "prior_alpha": 1.0,
+  "prior_beta": 1.0,
+  "minimum_effective_trials": 3.0,
+  "minimum_similarity": 0.4,
+  "geometry_transfer_weight": 0.5,
+  "setting_mismatch_weight": 0.5,
+  "adequate_success_mean": 0.8,
+  "cold_start_min_unchecked": 2,
+  "cold_start_longest_mm": 100,
+  "cold_start_box_volume_mm3": 125000,
+  "minimum_utility": 0.0,
+  "test_cost_multiplier": 1.0,
+  "test_cost_ranks": {"universal": 8, "stringing": 1, "bridges": 2, "overhangs": 2, "dimensions": 2, "fine": 2, "cube": 1}
+}

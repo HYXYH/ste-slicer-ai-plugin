@@ -1,5 +1,6 @@
 """Bounded Chat Completions transport using the Python 3.5 standard library."""
 import base64
+import copy
 import json
 import socket
 import time
@@ -75,6 +76,13 @@ class LLMClient:
 
     def complete(self, messages, tools=None, cancelled=None, deadline=None, structured=False):
         config = self.settings.private()
+        messages = copy.deepcopy(messages)
+        for message in messages:
+            if isinstance(message.get("content"), list):
+                for part in message["content"]:
+                    approved = part.pop("_authorized_recipient", None)
+                    if approved is not None and approved != recipient(config):
+                        fail("Получатель фотографий изменился. Повторно подтвердите отправку выбранных снимков.", "VISION_AUTHORIZATION_EXPIRED", 409)
         url = endpoint(config.get("base_url", ""))
         if not config.get("api_key") or not config.get("model"):
             fail("Сохраните ключ и модель в настройках подключения", "LLM_AUTH_ERROR", 409)
@@ -131,11 +139,14 @@ class LLMClient:
             except HTTPError as error:
                 code = error.code
                 unsupported = False
+                raw_error = error.read(16384)
                 if code == 400 and options.get("response_format", {}).get("type") == "json_schema":
-                    unsupported = schema_unsupported(error.read(16384))
+                    unsupported = schema_unsupported(raw_error)
                 metric.update(http_status=code, code="LLM_AUTH_ERROR" if code in (401, 403) else "LLM_HTTP_ERROR",
                               duration_ms=round((time.monotonic() - started) * 1000, 2))
                 error.close()
+                if code in (400, 415, 422) and vision_unsupported(raw_error):
+                    fail("Модель API не принимает изображения; продолжите текстовую диагностику", "VISION_UNSUPPORTED", 502)
                 if unsupported and attempt < MAX_RETRIES:
                     # Only an explicit rejection of json_schema permits this
                     # fallback. Validation and the schema in the prompt remain.
@@ -183,10 +194,26 @@ class LLMClient:
                         pass
 
 
-def image_content(attachment):
+def recipient(settings):
+    return settings.get("base_url", "").strip() + " · " + settings.get("model", "").strip()
+
+
+def authorized_images(session, settings):
+    return {fid for fid, target in session.get("vision_authorizations", {}).items() if target == recipient(settings)}
+
+
+def vision_unsupported(raw):
+    message = raw.decode("utf-8", errors="replace").lower()
+    return any(word in message for word in ("image", "vision", "multimodal")) and any(word in message for word in ("not support", "unsupported", "not allowed", "only text", "does not support", "invalid content type"))
+
+
+def image_content(attachment, authorized_recipient=None):
     with open(attachment["path"], "rb") as source:
         content = source.read(MAX_REQUEST_BYTES + 1)
     if len(content) > MAX_REQUEST_BYTES * 3 // 4:
         fail("Уменьшите изображение перед отправкой в LLM", "LLM_REQUEST_TOO_LARGE", 413)
     mime = "image/png" if attachment["name"].lower().endswith(".png") else "image/jpeg"
-    return {"type": "image_url", "image_url": {"url": "data:" + mime + ";base64," + base64.b64encode(content).decode("ascii")}}
+    result = {"type": "image_url", "image_url": {"url": "data:" + mime + ";base64," + base64.b64encode(content).decode("ascii")}}
+    if authorized_recipient is not None:
+        result["_authorized_recipient"] = authorized_recipient
+    return result

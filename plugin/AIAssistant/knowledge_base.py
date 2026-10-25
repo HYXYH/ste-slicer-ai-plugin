@@ -18,10 +18,10 @@ OUTCOMES = {"resolved": "Дефект исчез", "better": "Стало луч�
 CALIBRATION = [
     {"title": "Что такое калибровка?", "text": "Справочник даёт отправную точку. Результат зависит от конкретного принтера, сопла, материала и геометрии. Проверка на реальной печати помогает уточнить параметры.", "state": "Принцип"},
     {"title": "Что работает сейчас", "text": "После обычной или калибровочной печати можно сохранить наблюдения, фотографии и измерения, проверить одну гипотезу и сравнить результат. Повторённые независимые проверки формируют подтверждённые выводы. Калибровка необязательна.", "state": "Реализовано"},
-    {"title": "Когда предложить тест — планируемый механизм", "text": "После подбора параметров ассистент будет искать сопоставимые успехи и неудачи. Планируется модель Beta-Binomial с весами схожести условий, затем оценка полезности теста. Сейчас эти расчёты не выполняются; численных вероятностей нет.", "state": "Планируется"},
-    {"title": "Польза теста", "text": "U = P(дефекта) × P(обнаружения) × P(исправления) × потери от неудачи − стоимость теста. Это планируемый критерий: стоимость, потери и вероятности ещё не оцениваются автоматически.", "state": "Планируется"},
+    {"title": "Когда предложить тест", "text": "После подготовки итогового плана оцениваются отдельные характеристики: адгезия, экструзия, размеры, ретракт, охлаждение и межслойное сцепление. Используется Beta-Binomial с весами сходства и ограничением зависимых проверок. Это приближённая статистическая оценка, а не откалиброванный прогноз. При нехватке опыта действуют настраиваемые правила холодного старта; проценты не показываются.", "state": "Реализовано"},
+    {"title": "Польза теста", "text": "U = P(дефекта) × P(обнаружения) × P(исправления) × потери от неудачи − стоимость теста. Численный расчёт доступен только при достаточном опыте дефектов, обнаружения и исправлений и указанных пользователем затратах в общих единицах. Если хотя бы одного основания нет, применяется объяснимое правило холодного старта по новизне, сложности, размеру модели и прошлым проблемам. Стоимость печати автоматически не прогнозируется.", "state": "Реализовано с ограничениями данных"},
     {"title": "Два разных показателя", "text": "Готовность данных показывает, известны ли модель, конфигурация и требования. Подтверждённость параметров относится к реальным результатам в сопоставимых условиях. Готовность 100/100 не обещает печать без дефектов.", "state": "Важно"},
-    {"title": "Как проходит проверка", "text": "Подбор тестовой модели → подготовка и печать → опрос и измерения → диагностика → уточнение одного параметра → повторная проверка → сохранение опыта. Автоматический выбор специальной тестовой модели пока планируется; встроенный куб доступен отдельно.", "state": "Процесс"},
+    {"title": "Как проходит проверка", "text": "Выбор теста → согласование плана → расчёт и экспорт → физическая печать → релевантные проверки → диагностика → изменение одного параметра с согласия → повторная проверка → опыт. Поддерживаются универсальный тест, пирамиды ретракта, мосты, нависания, точность, мелкие элементы и куб. Температурные башни отключены. Планарные тесты автоматически предлагаются только для 3D. Перед тестом сохраните основной проект; по завершении верните его в сцену и обновите анализ.", "state": "Процесс"},
     {"title": "Как ассистент учится", "text": "Результат обычной детали — тоже источник опыта. Сообщение пользователя сохраняется как наблюдение, причина — как гипотеза. Исправление становится подтверждённым после нескольких независимых сопоставимых проверок. Противоречия, исправления и исключения наблюдений пересчитывают знания.", "state": "Реализовано"}]
 
 
@@ -63,7 +63,15 @@ def knowledge_conditions(snapshot, excluded_key=None, defect=None):
 
 
 def stable_id(kind, scope, extra):
-    return kind + "-" + hashlib.sha256(encode([scope, extra]).encode("utf-8")).hexdigest()[:24]
+    def canonical(value):
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, list):
+            return [canonical(v) for v in value]
+        if isinstance(value, dict):
+            return {k: canonical(v) for k, v in value.items()}
+        return value
+    return kind + "-" + hashlib.sha256(encode(canonical([scope, extra])).encode("utf-8")).hexdigest()[:24]
 
 
 def derive_conclusions(library):
@@ -84,6 +92,9 @@ def derive_conclusions(library):
         row["print_ids"] = sorted(set(row["print_ids"] + [item["id"]] + (pair or [])))
         row["created_at"] = max(row["created_at"], item["created_at"])
         row["evidence"].append({"print_id": item["id"], "outcome": outcome, "supporting": supporting, "pair": pair or [item["id"]], "date": item["created_at"]})
+    def independent_id(pid):
+        item = prints[pid]
+        return item["session_id"] + ":" + item["operation_id"]
     for item in library["prints"]:
         report = effective_report(item)
         scope = knowledge_conditions(item["snapshot"])
@@ -94,7 +105,10 @@ def derive_conclusions(library):
             continue
         # Unknown legacy settings may be displayed, but never merged or reused as known conditions.
         grouping_scope = scope if scope is not None else {"unknown_conditions_for_print": item["id"]}
-        row = group("configuration", grouping_scope, "visual", "Конфигурация проверена на отсутствие видимых дефектов")
+        inspected = sorted(k for k, v in data.get("checks", {}).items() if v in ("pass", "fail"))
+        from .calibration_assessment import FEATURES
+        description = "Конфигурация проверена: " + ", ".join(FEATURES[k]["title"] for k in inspected if k in FEATURES) if inspected else "Конфигурация проверена на отсутствие видимых дефектов"
+        row = group("configuration", grouping_scope, ["visual", inspected], description)
         row["parameters"] = parameters(item["snapshot"])
         evidence(row, item, data["result"], data["result"] == "good")
         for defect in data.get("defects", []):
@@ -147,14 +161,14 @@ def derive_conclusions(library):
     result = []
     for row in groups.values():
         proofs = [p for p in row["evidence"] if p["supporting"]]
-        negatives = {p["print_id"] for p in row["evidence"] if not p["supporting"]}
+        negatives = {independent_id(p["print_id"]) for p in row["evidence"] if not p["supporting"]}
         if row["type"] != "correction":
-            confirmations = len({p["print_id"] for p in proofs})
+            confirmations = len({independent_id(p["print_id"]) for p in proofs})
         else:
             # Maximum bipartite matching: one baseline and one repeat per independent experiment.
             edges, matched = {}, {}
             for proof in proofs:
-                edges.setdefault(proof["pair"][0], set()).add(proof["print_id"])
+                edges.setdefault(independent_id(proof["pair"][0]), set()).add(independent_id(proof["print_id"]))
             def augment(source, seen):
                 for repeated in sorted(edges[source]):
                     if repeated in seen:
@@ -249,6 +263,8 @@ class KnowledgeBase:
                 raise ApiError("Размеры: три положительных числа в мм; неизвестные оставьте пустыми")
         data = copy.deepcopy(found["data"])
         data.update({k: body[k] for k in ("result", "text", "defects", "measurements")})
+        if any(data.get(k) != found["data"].get(k) for k in ("result", "defects", "measurements")):
+            data["checks"] = {k: "unknown" for k in data.get("checks", {})}
         data.update(reported_defects=body["defects"], inferred_defects=[])
         self.db.revise_observation(observation_id, data, body["excluded"], body["reason"].strip())
         return self.snapshot()

@@ -1,5 +1,23 @@
 # HTTP, MCP и карта задачи
 
+## Интеллектуальная калибровка
+
+- `GET /api/sessions/{sid}/intelligent-calibration` — решение с источниками,
+  параметрами политики, взвешенными проверками и сценарий с печатями.
+- `POST /api/sessions/{sid}/intelligent-calibration/{command}`:
+  `refresh` (необязательный `costs: {main_loss, test_cost}` в одинаковых единицах),
+  `start` / `skip` (`decision_id`), `prepare`, `finish`, `cancel` (пустое тело).
+  Подготовка создаёт план, применение требует штатного согласования.
+- Существующий `POST .../print-feedback` принимает необязательный `checks`:
+  `adhesion|extrusion|dimensions|stringing|bridges|overhangs|small_features|bonding` →
+  `pass|fail|not_checked|unknown`. В тесте разрешены только доступные характеристики.
+  Для отправки выбранных `photo_ids` нужны `llm_photo_consent: true` и точный
+  `llm_recipient`: `base_url + " · " + model`. Смена получателя требует нового согласия.
+
+`utility: null` означает нехватку эмпирических оснований, а не нулевой риск.
+Все печати и эксперименты остаются в прежней SQLite.
+[Модель оценки и ограничения](intelligent-calibration.md).
+
 ## Страница «База знаний»
 
 - `GET /api/knowledge` — все зарегистрированные печати, наблюдения с историей правок,

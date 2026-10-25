@@ -1,0 +1,238 @@
+[
+  {
+    "id": "universal",
+    "file": "ksr_fdmtest_v4.stl",
+    "title": "Универсальный FDM-тест",
+    "checks": [
+      "adhesion",
+      "extrusion",
+      "dimensions",
+      "stringing",
+      "bridges",
+      "overhangs",
+      "small_features"
+    ],
+    "not_checked": [
+      "bonding"
+    ],
+    "dimensions_mm": [
+      75.0,
+      70.0,
+      92.0
+    ],
+    "cost_rank": 8,
+    "modes": [
+      "classic"
+    ],
+    "sha256": "724a5c042799fbfe63ce9f8ad3324bdd794fd794b61c532cf5e945b7df58b1a8",
+    "source": "rec3d_calibration/10_Open-Source_Printer_Evaluation/ksr_fdmtest_v4.stl",
+    "measurements": [
+      "expected_mm",
+      "actual_mm"
+    ],
+    "required_settings": {
+      "support_enable": false
+    },
+    "limitations": "Проверяет только отмеченные элементы при постоянной температуре. Не подтверждает прочность или межслойное сцепление под нагрузкой. Для 5D применимость не проверена."
+  },
+  {
+    "id": "stringing",
+    "file": "string_test_fast_pyramid.stl",
+    "title": "Ретракт: две пирамиды",
+    "checks": [
+      "adhesion",
+      "stringing",
+      "small_features"
+    ],
+    "not_checked": [
+      "extrusion",
+      "dimensions",
+      "bridges",
+      "overhangs",
+      "bonding"
+    ],
+    "dimensions_mm": [
+      20.0,
+      8.0,
+      17.2
+    ],
+    "cost_rank": 1,
+    "modes": [
+      "classic"
+    ],
+    "sha256": "634b4063ed80a94ff4e647071cdfbb75aec8f8fe28707110f4fa458b65c2e83f",
+    "source": "rec3d_calibration/13_Stringing/string_test_fast_pyramid.stl",
+    "measurements": [],
+    "required_settings": {
+      "support_enable": false
+    },
+    "limitations": "Проверяет только отмеченные элементы при постоянной температуре. Не подтверждает прочность или межслойное сцепление под нагрузкой. Для 5D применимость не проверена."
+  },
+  {
+    "id": "bridges",
+    "file": "bridging_test.stl",
+    "title": "Мосты",
+    "checks": [
+      "adhesion",
+      "extrusion",
+      "bridges"
+    ],
+    "not_checked": [
+      "dimensions",
+      "stringing",
+      "overhangs",
+      "small_features",
+      "bonding"
+    ],
+    "dimensions_mm": [
+      25.0,
+      66.5,
+      25.0
+    ],
+    "cost_rank": 2,
+    "modes": [
+      "classic"
+    ],
+    "sha256": "c4b383143166a2fea25d245626c090dccfe085c651dad17285c49a1b20a78f36",
+    "source": "rec3d_calibration/06_Shootout_Collection/bridging_test.stl",
+    "measurements": [],
+    "required_settings": {
+      "support_enable": false
+    },
+    "limitations": "Проверяет только отмеченные элементы при постоянной температуре. Не подтверждает прочность или межслойное сцепление под нагрузкой. Для 5D применимость не проверена."
+  },
+  {
+    "id": "overhangs",
+    "file": "overhang_test.stl",
+    "title": "Нависания",
+    "checks": [
+      "adhesion",
+      "overhangs"
+    ],
+    "not_checked": [
+      "extrusion",
+      "dimensions",
+      "stringing",
+      "bridges",
+      "small_features",
+      "bonding"
+    ],
+    "dimensions_mm": [
+      75.1924,
+      25.0,
+      40.9258
+    ],
+    "cost_rank": 2,
+    "modes": [
+      "classic"
+    ],
+    "sha256": "c2e3f6aef51c36c572dd2709edb517f91bd7f5fc229dc7e3a01e3e7bc9273ea2",
+    "source": "rec3d_calibration/06_Shootout_Collection/overhang_test.stl",
+    "measurements": [],
+    "required_settings": {
+      "support_enable": false
+    },
+    "limitations": "Проверяет только отмеченные элементы при постоянной температуре. Не подтверждает прочность или межслойное сцепление под нагрузкой. Для 5D применимость не проверена."
+  },
+  {
+    "id": "dimensions",
+    "file": "dimensional_accuracy_test.stl",
+    "title": "Размерная точность",
+    "checks": [
+      "adhesion",
+      "dimensions",
+      "extrusion"
+    ],
+    "not_checked": [
+      "stringing",
+      "bridges",
+      "overhangs",
+      "small_features",
+      "bonding"
+    ],
+    "dimensions_mm": [
+      25.0,
+      25.0,
+      30.0
+    ],
+    "cost_rank": 2,
+    "modes": [
+      "classic"
+    ],
+    "sha256": "5c4650d6a00469105c7a5342f46224c0832da7a92e247b79c912558a7c0c9278",
+    "source": "rec3d_calibration/06_Shootout_Collection/dimensional_accuracy_test.stl",
+    "measurements": [
+      "expected_mm",
+      "actual_mm"
+    ],
+    "required_settings": {},
+    "limitations": "Проверяет только отмеченные элементы при постоянной температуре. Не подтверждает прочность или межслойное сцепление под нагрузкой. Для 5D применимость не проверена."
+  },
+  {
+    "id": "fine",
+    "file": "fine_positive_features.stl",
+    "title": "Мелкие элементы",
+    "checks": [
+      "adhesion",
+      "small_features"
+    ],
+    "not_checked": [
+      "extrusion",
+      "dimensions",
+      "stringing",
+      "bridges",
+      "overhangs",
+      "bonding"
+    ],
+    "dimensions_mm": [
+      35.0,
+      35.0,
+      20.0
+    ],
+    "cost_rank": 2,
+    "modes": [
+      "classic"
+    ],
+    "sha256": "550ab4ea0a4d63cb1ef164392c5c483cb273b4a6cf2c066b1c56d6630a428e57",
+    "source": "rec3d_calibration/06_Shootout_Collection/fine_positive_features.stl",
+    "measurements": [],
+    "required_settings": {
+      "support_enable": false
+    },
+    "limitations": "Проверяет только отмеченные элементы при постоянной температуре. Не подтверждает прочность или межслойное сцепление под нагрузкой. Для 5D применимость не проверена."
+  },
+  {
+    "id": "cube",
+    "file": "cube-20mm.stl",
+    "title": "Куб 20 мм",
+    "checks": [
+      "adhesion",
+      "dimensions",
+      "extrusion"
+    ],
+    "not_checked": [
+      "stringing",
+      "bridges",
+      "overhangs",
+      "small_features",
+      "bonding"
+    ],
+    "dimensions_mm": [
+      20.0,
+      20.0,
+      20.0
+    ],
+    "cost_rank": 1,
+    "modes": [
+      "classic"
+    ],
+    "sha256": "7cb6f75f31fb2773721b56a1bd1db88b104db7891fa2870fe9dc8ba98cddbc07",
+    "source": "Встроенная модель STE Slicer AI Assistant",
+    "measurements": [
+      "expected_mm",
+      "actual_mm"
+    ],
+    "required_settings": {},
+    "limitations": "Проверяет только отмеченные элементы при постоянной температуре. Не подтверждает прочность или межслойное сцепление под нагрузкой. Для 5D применимость не проверена."
+  }
+]

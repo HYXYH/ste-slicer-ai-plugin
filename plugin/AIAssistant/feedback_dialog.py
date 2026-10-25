@@ -134,6 +134,19 @@ class FeedbackDialog(QDialog):
                 row.addWidget(field)
             measures.addRow(title, row)
         self.layout.addLayout(measures)
+        from .calibration_assessment import FEATURES
+        self.checks = {}
+        check_form = QFormLayout()
+        self.layout.addWidget(label("Необязательно: отметьте только действительно проверенные характеристики. Хороший общий вид не подтверждает мосты и прочность."))
+        for key, meta in FEATURES.items():
+            if key == "bonding":
+                continue
+            field = QComboBox()
+            for value, title in (("not_checked", "Не проверялось"), ("pass", "Дефектов нет"), ("fail", "Есть дефект"), ("unknown", "Не могу определить")):
+                field.addItem(title, value)
+            self.checks[key] = field
+            check_form.addRow(meta["title"], field)
+        self.layout.addLayout(check_form)
         self.photo_label = label("Фотографии: общий вид, сбоку, снизу")
         self.layout.addWidget(self.photo_label)
         self.layout.addWidget(button("Добавить фотографии", self.upload_photos))
@@ -316,6 +329,7 @@ class FeedbackDialog(QDialog):
         body = {"request_id": request_id(), "operation_id": self.operation.currentData(), "printed": True,
                 "result": self.result.currentData(), "defects": sorted(self.selected) if self.result.currentData() == "defects" else [],
                 "text": self.note.toPlainText(), "answers": {}, "measurements": measurements, "photo_ids": self.photos}
+        body["checks"] = {k: field.currentData() for k, field in self.checks.items()}
         if self.pid:
             body["print_id"] = self.pid
         payload_key = json.dumps({k: v for k, v in body.items() if k != "request_id"}, sort_keys=True, ensure_ascii=False)

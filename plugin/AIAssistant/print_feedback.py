@@ -48,6 +48,8 @@ class PrintFeedback:
                            "result": {"enum": ["good", "defects", "not_checked", "unknown"]},
                            "defects": array({"enum": list(DEFECTS)}, 18), "text": {"type": "string", "maxLength": 4000},
                            "answers": {"type": "object"}, "measurements": {"type": "object"},
+                           "checks": {"type": "object"},
+                           "llm_photo_consent": {"type": "boolean"}, "llm_recipient": {"type": "string", "maxLength": 1000},
                            "photo_ids": array(ID, 12)}, ["operation_id", "request_id", "printed", "result", "defects", "text", "answers", "measurements", "photo_ids"]))
         session = self.store.internal(sid)
         operation = session["operations"].get(body["operation_id"])
@@ -66,6 +68,20 @@ class PrintFeedback:
             if not isinstance(values, list) or len(values) != 3 or any(v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0) for v in values):
                 raise ApiError("Укажите три положительных размера в мм или оставьте неизвестные пустыми")
         photos = []
+        from .agent.llm_client import recipient
+        accepted_recipient = recipient(self.server.settings.private())
+        if body.get("llm_photo_consent") and body.get("llm_recipient") != accepted_recipient:
+            raise ApiError("Получатель LLM изменился; повторно подтвердите отправку выбранных фотографий", 409)
+        from .calibration_assessment import FEATURES, CHECKS
+        checks = body.get("checks", {})
+        if set(checks) - set(FEATURES) or any(v not in CHECKS for v in checks.values()):
+            raise ApiError("Неверные результаты отдельных проверок")
+        if (body["result"] == "good" and "fail" in checks.values()) or (body["result"] in ("unknown", "not_checked") and any(v in ("pass", "fail") for v in checks.values())):
+            raise ApiError("Общий результат противоречит отмеченным проверкам")
+        run = session.get("intelligent_calibration", {})
+        calibration = run.get("state") in ("preparing", "test_ready", "awaiting_print", "review") and operation.get("plan_id") in run.get("plan_ids", [])
+        if calibration and set(checks) - set(run["test"]["checks"]):
+            raise ApiError("Эти характеристики не проверяются выбранной моделью")
         for fid in dict.fromkeys(body["photo_ids"]):
             attachment = session["files"].get(fid)
             if not attachment or attachment["kind"] != "image":
@@ -77,18 +93,28 @@ class PrintFeedback:
                 shutil.copyfile(attachment["path"], destination)
             photos.append({"id": photo_id, "name": attachment["name"]})
         data = {"kind": "user_observation", "result": body["result"], "text": text(body["text"]), "defects": defects,
-                "print_kind": "calibration" if session.get("calibration_for") else "ordinary",
+                "print_kind": "calibration" if session.get("calibration_for") or calibration else "ordinary", "checks": checks,
+                "llm_photo_consent": body.get("llm_photo_consent", False),
                 "reported_defects": body["defects"], "inferred_defects": [k for k in defects if k not in body["defects"]],
                 "answers": answers, "measurements": measures, "photos": photos, "printed": True}
+        if calibration:
+            data["calibration"] = {"run_id": run["id"], "test_id": run["test"]["id"], "checks_available": run["test"]["checks"], "control_print_ids": run.get("control_print_ids", [])}
         with self.lock:
             item = self.db.record(sid, operation, data, body["request_id"], body.get("print_id"))
             marker = "print-report-" + body["request_id"]
             if not any(m.get("experience_request") == marker for m in self.store.internal(sid)["messages"]):
                 def saved(s):
-                    s["messages"].append({"id": uid(), "role": "user", "created_at": now(), "file_ids": body["photo_ids"], "experience_request": marker,
+                    s["messages"].append({"id": uid(), "role": "user", "created_at": now(), "file_ids": body["photo_ids"], "experience_request": marker, "calibration_message": calibration,
                         "text": "Сохранён результат фактической печати: " + {"good": "дефектов нет", "defects": "; ".join(DEFECTS[k]["label"] for k in defects) or "описаны пользователем",
                         "not_checked": "не проверялось", "unknown": "не могу определить, нужны фотографии"}[body["result"]] + ". " + data["text"] + "\nЗапись опыта: " + item["id"] + "."})
                 self.store.edit(sid, saved)
+            if body.get("llm_photo_consent"):
+                def authorize(s):
+                    for fid in body["photo_ids"]:
+                        s.setdefault("vision_authorizations", {})[fid] = accepted_recipient
+                self.store.edit(sid, authorize)
+        if calibration:
+            self.server.calibration.reported(sid, item)
         return {"print": item, "questions": self.questions(item), "external": EXTERNAL}
 
     def questions(self, item):
@@ -258,6 +284,8 @@ class PrintFeedback:
         plan = self.server.plans.build(sid, {"decision_proposals": [{"candidate_id": "print-trial", "actions": [], "source_refs": refs,
                                            "limitations": ["Повторная печать проверяет одну гипотезу; исходные инженерные ограничения сохраняются"] + original_plan["limitations"]}]})
         self.store.edit(sid, lambda s: s.update(workflow_state="plan_ready"))
+        if self.store.internal(sid).get("intelligent_calibration", {}).get("state") in ("preparing", "test_ready", "awaiting_print", "review"):
+            self.store.edit(sid, lambda s: s["intelligent_calibration"]["plan_ids"].append(plan["id"]))
         return plan
 
     def evaluate(self, sid, aid, body):

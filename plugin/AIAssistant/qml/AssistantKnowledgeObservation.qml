@@ -51,7 +51,9 @@ Rectangle {
         Text { width:parent.width; text:card.entry.status_label || "Наблюдение"; textFormat:Text.PlainText; color:card.entry.excluded ? "#8392a6" : "#236e9b"; font.bold:true; font.pixelSize:13; wrapMode:Text.Wrap }
         Text { width:parent.width; text:card.entry.date || ""; color:"#8b9eb4"; font.pixelSize:10 }
         Text { width:parent.width; text:card.entry.text || "Описание не добавлено"; textFormat:Text.PlainText; color:"#46617c"; wrapMode:Text.Wrap; font.pixelSize:12 }
+        Text { width:parent.width;visible:!!card.entry.visual_hypothesis;text:"Гипотеза ассистента по фото, не подтверждено: " + ((card.entry.visual_hypothesis || {}).text || "");textFormat:Text.PlainText;color:"#967b53";wrapMode:Text.Wrap;font.pixelSize:11 }
         Repeater { model:card.entry.defect_labels || []; Text { width:body.width; text:"• " + modelData; textFormat:Text.PlainText; wrapMode:Text.Wrap; color:"#a66e36"; font.pixelSize:12 } }
+        Repeater { model:card.entry.checked_labels || []; Text { width:body.width; text:modelData; textFormat:Text.PlainText; wrapMode:Text.Wrap; color:"#658b9f"; font.pixelSize:11 } }
         Text { width:parent.width; text:"По модели: " + [card.dimension("expected_mm",0)||"?",card.dimension("expected_mm",1)||"?",card.dimension("expected_mm",2)||"?"].join(" × ") + " мм\nИзмерено: " + [card.dimension("actual_mm",0)||"?",card.dimension("actual_mm",1)||"?",card.dimension("actual_mm",2)||"?"].join(" × ") + " мм"; color:"#7890a8"; wrapMode:Text.Wrap; font.pixelSize:11 }
         Flow {
             width:parent.width; spacing:8

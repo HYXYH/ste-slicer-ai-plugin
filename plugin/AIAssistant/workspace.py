@@ -220,7 +220,7 @@ class Workspace:
                 "status_text": "Есть противоречия в данных" if data_conflicts else "Данных достаточно для подготовки плана" if status == "sufficient" else "Нужны дополнительные данные",
                 "weakest": [c["id"] for c in weakest if c["score"] < c["maximum"]], "questions": questions,
                 "failed_checks": failed_checks,
-                "recommend_calibration": status != "sufficient" or bool(failed_checks),
+                "recommend_calibration": bool(failed_checks),
                 "calibration_questions": calibration_questions,
                 "process_signature": process.get("signature") if compatible and configuration == 30 else None, "calibration": record, "answers": answers,
                 "meaning": "Полнота необходимых данных для подбора параметров. Не оценка качества печати или прочности детали.",

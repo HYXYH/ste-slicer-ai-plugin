@@ -139,7 +139,16 @@ class Plans:
         plan["validation"] = self.validate(session, plan, scene)
         plan["status"] = "validated"
         self.store.edit(sid, lambda s: s["plans"].update({plan["id"]: plan}))
+        self.calibration_check(sid, plan)
         return plan
+
+    def calibration_check(self, sid, plan):
+        if hasattr(self.server, "calibration"):
+            try:
+                self.server.calibration.consider(sid, plan)
+            except Exception:
+                # Optional calibration must never invalidate an otherwise valid print plan.
+                self.store.edit(sid, lambda s: s.update(calibration_decision={"offer": False, "reason": "Оценка калибровки недоступна. Печатать можно по согласованному плану; сообщите результат после печати."}))
 
     def approve(self, sid, pid, version):
         session = self.store.internal(sid)
@@ -300,6 +309,7 @@ class Plans:
                 result = self._measured_call(client, sid, context["run_id"], action["tool"], args)
                 self.store.edit(sid, lambda s: s["plans"][pid]["completed_actions"].append(action["id"]))
             self.store.edit(sid, lambda s: s["plans"][pid].update(status="applied", applied_snapshot_ref=self.expected[pid]))
+            self.calibration_check(sid, self.store.internal(sid)["plans"][pid])
             context["phase"] = "slicing"
             self.store.edit(sid, lambda s: s.update(workflow_state="slicing"))
             result = self._measured_call(client, sid, context["run_id"], "start_slicing", {"plan_id": pid, "request_id": pid + ":slice"})

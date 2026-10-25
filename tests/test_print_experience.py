@@ -81,11 +81,12 @@ class PrintExperienceTests(unittest.TestCase):
     def confirmed(self, outcome="resolved"):
         for index in range(2 if outcome == "resolved" else 1):
             self.values["material_print_temperature"] = 210
-            self.add_operation("first")
-            trial = self.proposal()
+            self.add_operation("baseline-" + str(index))
+            report = self.report("baseline-" + str(index))
+            trial = self.feedback.propose(self.sid, report["print"]["id"], {"defect": "stringing", "choice": "0", "external_checked": True})["adjustment"]
             self.feedback.apply(self.sid, trial["id"], True)
-            self.add_operation("repeat")
-            result = self.report("repeat", "good" if outcome == "resolved" else "defects")
+            self.add_operation("repeat-" + str(index))
+            result = self.report("repeat-" + str(index), "good" if outcome == "resolved" else "defects")
             verified = self.feedback.evaluate(self.sid, trial["id"], {"repeat_print_id": result["print"]["id"], "outcome": outcome})
         return verified
 

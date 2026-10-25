@@ -49,6 +49,8 @@ class LocalServer(ThreadingMixIn, HTTPServer):
         self.print_feedback = PrintFeedback(self)
         from .knowledge_base import KnowledgeBase
         self.knowledge_base = KnowledgeBase(store, self.print_feedback.db)
+        from .calibration import Calibration
+        self.calibration = Calibration(self)
         self.tools.experience = self.print_feedback.db
         self.tools.authorize_change = self.plans.authorize
         self.runner = Runner(self)
@@ -60,6 +62,7 @@ class LocalServer(ThreadingMixIn, HTTPServer):
         self.thread.start()
 
     def stop(self):
+        self.calibration.closed.set()
         self.runner.close()
         self.plans.close()
         if self.thread:
@@ -358,6 +361,15 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) < 4 or parts[:2] != ["api", "sessions"]:
             return None
         sid, action = parts[2:4]
+        if action == "intelligent-calibration":
+            store.get(sid)
+            if len(parts) == 4 and method == "GET":
+                return server.calibration.state(sid), 200
+            if len(parts) == 5 and method == "POST":
+                body = self._json()
+                validate(body, obj({"decision_id": ID, "costs": {"type": "object"}}))
+                return server.calibration.command(sid, parts[4], body), 200
+            raise ApiError("Маршрут калибровки не найден", 404)
         if action == "workspace" and len(parts) == 4:
             if method == "GET":
                 return store.get(sid, compact=True), 200

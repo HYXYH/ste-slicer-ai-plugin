@@ -56,7 +56,7 @@ class WorkspaceTests(unittest.TestCase):
         self.store.edit(self.sid, lambda s: s["messages"].append({"id": "fake", "role": "assistant", "text": "Уверенность 99%", "file_ids": []}))
         second = self.server.workspace.assessment(self.sid)
         self.assertEqual({k: v for k, v in first.items() if k != "session_revision"}, {k: v for k, v in second.items() if k != "session_revision"})
-        self.assertTrue(first["recommend_calibration"])
+        self.assertFalse(first["recommend_calibration"])
         self.assertEqual(sum(c["score"] for c in first["components"]), first["score"])
         self.server.workspace.save_answers(self.sid, {"load": "не применяется", "temperature": "20 °C", "environment": "помещение"})
         self.assertEqual(self.api("PATCH", "/api/sessions/" + self.sid + "/assessment", {"threshold": 1})[0], 400)

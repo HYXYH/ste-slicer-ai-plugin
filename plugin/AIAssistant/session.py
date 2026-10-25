@@ -41,6 +41,9 @@ def workspace_view(session):
     result["timeline"] = conversation_timeline(session)
     from .user_view import labels_for_task
     result["field_labels"] = labels_for_task(session["task_map"])
+    result["calibration_decision"] = {k: v for k, v in session.get("calibration_decision", {}).items() if k != "snapshot"}
+    result["intelligent_calibration"] = {k: v for k, v in session.get("intelligent_calibration", {}).items()
+                                         if k in ("id", "state", "test", "file_id", "last_print_id", "visual")}
     return copy.deepcopy(result)
 
 
@@ -311,7 +314,7 @@ class SessionStore:
                                   "context": copy.deepcopy(context)})
             if text.strip():
                 s["task"]["description"] = "\n\n".join(
-                    m["text"] for m in s["messages"] if m["role"] == "user" and m["text"])
+                    m["text"] for m in s["messages"] if m["role"] == "user" and m["text"] and not m.get("calibration_message"))
             new_operations = []
             for file_id in file_ids:
                 attachment = s["files"][file_id]

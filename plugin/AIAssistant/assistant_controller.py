@@ -18,6 +18,8 @@ PARAMETERS = {key: label for key, (label, unit) in SETTINGS.items()}
 
 
 def analysis_action(session, config):
+    if session and session.get("intelligent_calibration", {}).get("state") in ("preparing", "test_ready", "awaiting_print", "review"):
+        return {}
     if not session or session.get("calibration_for"):
         return {}
     state = session.get("workflow_state", "idle")
@@ -139,6 +141,7 @@ class AssistantController(QObject):
         if not sid:
             return
         self.current, self.session = sid, None
+        self.calibration_data = {}
         self.receive_progress({})
         self.assessment, self.prompt = {}, None
         self.analytics_mode, self.chats_mode, self.history = False, False, False
@@ -157,6 +160,8 @@ class AssistantController(QObject):
         self.session = session
         if same_revision:
             return
+        if session.get("calibration_decision") or session.get("intelligent_calibration"):
+            self.loadIntelligentCalibration()
         if session.get("workflow_state") not in ("applying", "slicing", "exporting", "waiting_import"):
             self.last_assessment = 0
         d = self.draft_for(self.current)
@@ -253,6 +258,9 @@ class AssistantController(QObject):
                       "knowledge": self.knowledge_mode, "knowledgeData": self.knowledge_view, "knowledgeOptions": dict(self.knowledge_options),
                       "knowledgeLoading": self.knowledge_loading, "knowledgeIssue": self.knowledge_issue,
                       "calibrationInfo": CALIBRATION,
+                      "intelligentCalibration": getattr(self, "calibration_data", {}),
+                      "llmRecipient": self.config.get("base_url", "").strip() + " · " + self.config.get("model", "").strip(),
+                      "photoFiles": [{"id": f["id"], "name": f["name"]} for f in session.get("files", {}).values() if f["kind"] == "image"],
                       "analyticsData": analytics_projection(self.report, self.report_search, self.report_filter, self.report_issue),
                       "analyticsFilter": self.report_filter, "analyticsSearch": self.report_search, "analyticsDays": self.days, "analyticsIssue": self.report_issue,
                       "calibrationFor": session.get("calibration_for", {}), "config": self.config, "configVersion": self.config_version, "prompt": self.prompt or {}}
@@ -266,6 +274,10 @@ class AssistantController(QObject):
 
     @pyqtSlot()
     def reportPrintResult(self):
+        if (self.session or {}).get("intelligent_calibration", {}).get("state") in ("preparing", "test_ready", "awaiting_print", "review"):
+            self.loadIntelligentCalibration()
+            self.notice("Заполните результат в блоке калибровки в чате.")
+            return
         sid = self.current
         if not sid:
             return
@@ -492,6 +504,9 @@ class AssistantController(QObject):
 
     @pyqtSlot()
     def analyze(self):
+        if (self.session or {}).get("intelligent_calibration", {}).get("state") in ("preparing", "test_ready", "awaiting_print", "review"):
+            self.calibrationCommand("prepare", {})
+            return
         route = "/calibration/plan" if (self.session or {}).get("calibration_for") else "/runs"
         self.client.call(self.path() + route, lambda value: self.poll(), "POST", {"request_id": request_id()})
 
@@ -770,6 +785,46 @@ class AssistantController(QObject):
     @pyqtSlot()
     def createCalibration(self):
         self.client.call(self.path() + "/calibration", lambda value: self.select(value["id"]), "POST", {"request_id": request_id()})
+
+    @pyqtSlot()
+    def loadIntelligentCalibration(self):
+        sid = self.current
+        def loaded(value):
+            if sid == self.current:
+                self.calibration_data = value
+                self.update_buttons()
+        self.client.call(self.path(sid) + "/intelligent-calibration", loaded)
+
+    @pyqtSlot(str, 'QVariantMap')
+    def calibrationCommand(self, command, body):
+        sid = self.current
+        def loaded(value):
+            if sid == self.current:
+                self.calibration_data = value
+                self.update_buttons()
+            self.poll()
+        self.client.call(self.path(sid) + "/intelligent-calibration/" + command, loaded, "POST", dict(body))
+
+    @pyqtSlot(str, str, 'QVariantMap')
+    def calibrationFeedback(self, identifier, command, body):
+        payload = dict(body)
+        if command == "report":
+            suffix = ""
+            payload["request_id"] = request_id()
+        else:
+            suffix = "/" + quote(identifier, safe="") + "/" + command
+        sid = self.current
+        def loaded(value):
+            if "manual" in value:
+                self.notice(value["manual"])
+            elif "adjustment" in value:
+                a = value["adjustment"]["data"]
+                self.notice("Гипотеза: " + field_label(a["key"]) + " " + str(a["before"]) + " → " + str(a["after"]) + ". " + a["reason"])
+            else:
+                self.notice("Сохранено. Факты и гипотезы учитываются отдельно.")
+            self.loadIntelligentCalibration()
+            self.poll()
+        self.client.call(self.path(sid) + "/print-feedback" + suffix, loaded, "POST", payload)
 
     @pyqtSlot(str, str, str, bool, bool, bool, bool)
     def saveCalibration(self, x, y, z, adhesion, layers, surface, printed):

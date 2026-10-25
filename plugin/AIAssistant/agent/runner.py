@@ -10,7 +10,7 @@ from ..documents import task_input
 from ..task_data import field_for, set_answer, reconcile_answers
 from ..user_view import readable_text
 from .contracts import strict_json, fail, validate, obj, ID, TEXT, array
-from .llm_client import LLMClient, image_content, endpoint, HTTP_TIMEOUT
+from .llm_client import LLMClient, image_content, endpoint, HTTP_TIMEOUT, authorized_images, recipient
 from .mcp_client import MCPClient
 from .prompts import SYSTEM, STRUCTURE, DECISION
 from .context import analysis_context, compact_result
@@ -33,6 +33,15 @@ STEP_NAMES = {"requirements": "Подтвердите, что требовани
 
 def task_text(session):
     return "\n".join([session["task"].get("description") or "", task_input(session)])
+
+
+def text_only(messages):
+    result = copy.deepcopy(messages)
+    for message in result:
+        if isinstance(message.get("content"), list):
+            message["content"] = [p for p in message["content"] if p.get("type") != "image_url"]
+    result.append({"role": "system", "content": "Изображения не доступны для анализа. Не утверждай, что осмотрел фото; задавай текстовые вопросы о видимых признаках."})
+    return result
 
 
 class Runner:
@@ -108,6 +117,7 @@ class Runner:
             self.store.event(sid, rid, "llm_request", purpose="analysis", **self.server.settings.redact(metric))
         llm = LLMClient(self.server.settings, observer=llm_metric)
         counts, calls, repeated, cached = {"llm": 0}, [], {}, {}
+        vision = {"disabled": False}
         visible_sources = set()
         def apply_experience(result):
             from ..experience import proposed_snapshot, reuse
@@ -130,6 +140,8 @@ class Runner:
             if time.monotonic() > deadline:
                 fail("Истёк срок анализа", "LLM_TIMEOUT", 504)
         def complete(messages, tools=None, structured=False):
+            if vision["disabled"]:
+                messages = text_only(messages)
             check()
             counts["llm"] += 1
             if counts["llm"] > MAX_LLM_REQUESTS:
@@ -144,7 +156,15 @@ class Runner:
             elif structured:
                 sources = self.store.internal(sid)["sources"]
                 schema = proposal_schema({key: sources[key] for key in visible_sources if key in sources})
-            response = llm.complete(messages, tools, cancelled, deadline, structured=schema)
+            try:
+                response = llm.complete(messages, tools, cancelled, deadline, structured=schema)
+            except ApiError as exc:
+                has_images = any(isinstance(m.get("content"), list) and any(p.get("type") == "image_url" for p in m["content"]) for m in messages)
+                if not has_images or exc.code not in ("VISION_UNSUPPORTED", "LLM_REQUEST_TOO_LARGE", "VISION_AUTHORIZATION_EXPIRED"):
+                    raise
+                vision["disabled"] = True
+                self.store.event(sid, rid, "progress", message="Визуальный анализ недоступен; продолжаю по тексту. Фото не считаются осмотренными.")
+                return complete(text_only(messages), tools, structured)
             check()
             return self.server.settings.redact(response)
         def tool(name, args, call_id=None, fresh=False):
@@ -182,7 +202,7 @@ class Runner:
                 check()
                 session = self.store.internal(sid)
                 used = set(fid for m in session["messages"] for fid in m.get("file_ids", []))
-                attachments = [f for f in session["files"].values() if f["id"] in used and f["kind"] == "model"]
+                attachments = [f for f in session["files"].values() if f["id"] in used and f["kind"] == "model" and not f.get("calibration_test")]
                 if any(f["status"] in ("error", "interrupted") for f in attachments):
                     fail("Не все прикреплённые модели импортированы", "IMPORT_FAILED", 409)
                 if not any(f["status"] in ("queued", "importing") for f in attachments):
@@ -194,6 +214,8 @@ class Runner:
             client.initialize()
             scene_result = tool("get_scene_snapshot", {})
             scene = scene_result["data"]
+            self.server.calibration.resume_main(sid, scene)
+            session = self.store.internal(sid)
             capabilities = tool("get_printer_capabilities", {})
             configuration = tool("get_current_configuration", {})
             if scene["snapshot_ref"] != configuration["snapshot_ref"]:
@@ -231,7 +253,11 @@ class Runner:
             if stepwise:
                 def progress(message):
                     self.store.event(sid, rid, "progress", phase="step", message=message)
-                steps = Steps(complete, rejected, progress, apply_experience)
+                image_settings = self.server.settings.private()
+                allowed_photos = authorized_images(session, image_settings)
+                # Only images explicitly selected for this configured recipient may leave the application.
+                images = [image_content(session["files"][fid], recipient(image_settings)) for fid in sorted(allowed_photos) if fid in session["files"] and session["files"][fid]["kind"] == "image"]
+                steps = Steps(complete, rejected, progress, apply_experience, images)
                 catalog = list(materials["data"]["items"])
                 cursor = materials["data"].get("next_cursor")
                 while cursor and len(catalog) < 500:
@@ -282,12 +308,12 @@ class Runner:
                 contract_text = "\nТочная JSON Schema ответа (кроме структуры, сервер проверяет источники и инженерные основания):\n" + json.dumps(proposal_schema(), ensure_ascii=False, separators=(",", ":"))
                 messages = [{"role": "system", "content": SYSTEM + "\n" + DECISION + contract_text}, {"role": "user", "content": json.dumps(context, ensure_ascii=False, separators=(",", ":"))}]
                 # History reduction is deterministic: last 20 user messages; the task map retains earlier requirements.
-                for message in [m for m in session["messages"] if m["role"] == "user"][-20:]:
+                for message in [m for m in session["messages"] if m["role"] == "user" and not m.get("calibration_message")][-20:]:
                     content = [{"type": "text", "text": "message_id=" + message["id"] + "\n" + (message["text"] or "Вложения к задаче")}]
                     for fid in message.get("file_ids", []):
                         attachment = self.store.file(sid, fid)
-                        if attachment["kind"] == "image":
-                            content.append(image_content(attachment))
+                        if attachment["kind"] == "image" and fid in authorized_images(session, self.server.settings.private()):
+                            content.append(image_content(attachment, session["vision_authorizations"][fid]))
                     messages.append({"role": "user", "content": content})
                 schemas = client.request("tools/list")["tools"]
                 read_names = set(tool["name"] for tool in self.server.tools.listing(read_only=True))
@@ -396,6 +422,8 @@ class Runner:
                 if updated["requirements"] and (waiting == "requirements" or not stepwise):
                     s["messages"][-1]["requirements_card"] = {"rows": copy.deepcopy(updated["requirements"] + updated["constraints"]),
                                                                "conflicts": copy.deepcopy(updated["conflicts"])}
+                if vision["disabled"]:
+                    s["messages"][-1]["text"] += "\nФотографии не проанализированы: используйте описание видимых признаков для текстовой диагностики."
             self.store.edit(sid, finish)
             self.store.event(sid, rid, "run_finished", state=state)
         except Exception as exc:

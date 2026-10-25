@@ -44,9 +44,11 @@ def snapshot_sections(snapshot):
 
 def observation_card(observation):
     data = observation["data"]
+    from .calibration_assessment import FEATURES
     return dict(copy.deepcopy(data), id=observation["id"], date=observation["created_at"], excluded=observation.get("excluded", False),
                 status_label="Исключено из рекомендаций" if observation.get("excluded") else RESULTS.get(data["result"], data["result"]),
                 defect_labels=[DEFECTS[k]["label"] for k in data.get("defects", []) if k in DEFECTS],
+                checked_labels=[FEATURES[k]["title"] + ": " + {"pass": "дефектов нет", "fail": "есть дефект", "unknown": "не могу определить", "not_checked": "не проверялось"}.get(v, v) for k, v in data.get("checks", {}).items() if k in FEATURES],
                 revisions=[{"date": r["created_at"], "reason": r["reason"], "excluded": bool(r["excluded"]),
                             "result": RESULTS.get(r["data"]["result"], r["data"]["result"]), "text": r["data"].get("text", ""),
                             "defects": [DEFECTS[k]["label"] for k in r["data"].get("defects", []) if k in DEFECTS],

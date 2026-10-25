@@ -44,6 +44,7 @@ Rectangle {
         onDraftChanged: if (root.backend) composer.text = root.backend.draft
     }
     Timer { id: tailTimer; interval: 20; onTriggered: if (root.followTail) conversation.contentY = Math.max(0, conversation.contentHeight - conversation.height); }
+    Timer { id:calibrationFocusTimer;interval:30;onTriggered:conversation.contentY=Math.max(0,calibrationChat.y) }
     DropArea {
         anchors.fill: parent
         enabled: !root.v.analytics && !root.v.chats && !root.v.knowledge && !root.v.busy
@@ -239,6 +240,13 @@ Rectangle {
                         }
                         AssistantButton { visible:!!root.v.active; text:"Остановить"; compact:true; enabled:!root.v.busy; onClicked:root.act("cancel") }
                         AssistantButton { text:"Сообщить о результате печати"; enabled:!!root.v.sessionId && !root.v.busy && !root.v.active; onClicked:root.act("reportPrintResult") }
+                        AssistantCalibrationChat {
+                            id:calibrationChat
+                            width:parent.width;backend:root.backend;viewState:root.v
+                            visible:!!((root.v.intelligentCalibration || {}).decision || {}).offer || ["preparing","test_ready","awaiting_print","review"].indexOf(((root.v.intelligentCalibration || {}).run || {}).state)>=0
+                            onExplain:root.modal="calibrationInfo"
+                            onActiveChanged:if(active){root.followTail=false;calibrationFocusTimer.restart();}
+                        }
                         AssistantCard {
                             property var recovery:root.v.analysisAction || ({})
                             visible:!!recovery.kind
@@ -462,6 +470,17 @@ Rectangle {
                     }
                     Column {
                         visible:root.modal === "calibrationInfo"; spacing:12
+                        Text { width:parent.width;text:(((root.v.intelligentCalibration || {}).decision || {}).reason || "");textFormat:Text.PlainText;wrapMode:Text.Wrap;color:"#426f91";font.pixelSize:12 }
+                        Text { width:parent.width;text:"Недостаточно проверено: " + ((((root.v.intelligentCalibration || {}).decision || {}).unchecked_labels || []).join("; "));wrapMode:Text.Wrap;color:"#987947";font.pixelSize:11 }
+                        Text { width:parent.width;text:"Учтены печати: " + ((((root.v.intelligentCalibration || {}).decision || {}).print_ids || []).join(", ") || "сопоставимых проверок нет");textFormat:Text.PlainText;wrapMode:Text.Wrap;color:"#6988a2";font.pixelSize:10 }
+                        Text { width:parent.width;text:"Тест: " + (((((root.v.intelligentCalibration || {}).decision || {}).test || {}).title) || "не выбран") + " · " + (((((root.v.intelligentCalibration || {}).decision || {}).test || {}).limitations) || "");wrapMode:Text.Wrap;color:"#6988a2";font.pixelSize:11 }
+                        Repeater {
+                            model:(((root.v.intelligentCalibration || {}).decision || {}).features || []).filter(function(f){return f.required;})
+                            Text { width:parent.width;text:modelData.title + ": учтено проверок с весами " + modelData.effective_trials + ", успешных " + modelData.success_weight.toFixed(1) + ", неудачных " + modelData.failure_weight.toFixed(1) + (modelData.mean === null || modelData.mean === undefined ? "; данных недостаточно для вероятностной оценки" : "; оценка по истории, не гарантия");wrapMode:Text.Wrap;color:"#6988a2";font.pixelSize:11 }
+                        }
+                        Text { width:parent.width;text:"Для расчёта U можно указать потери от неудачной основной печати и стоимость выбранного теста в одинаковых условных единицах. Без данных об обнаружении и исправлении останутся правила холодного старта.";wrapMode:Text.Wrap;color:"#6988a2";font.pixelSize:11 }
+                        RowLayout { width:parent.width;TextField { id:mainLoss;Layout.fillWidth:true;placeholderText:"Потери при неудаче" } TextField { id:testCost;Layout.fillWidth:true;placeholderText:"Стоимость теста" } }
+                        AssistantButton { text:"Обновить оценку с затратами";compact:true;onClicked:if(root.backend)root.backend.calibrationCommand("refresh",{costs:{main_loss:Number(mainLoss.text.replace(",",".")),test_cost:Number(testCost.text.replace(",","."))}}) }
                         Repeater {
                             model:root.v.calibrationInfo || []
                             Column {

@@ -88,7 +88,7 @@ class Steps:
         payloads = {v["message_id"]: v["payload"] for v in session["workflow_requests"].values()
                     if isinstance(v, dict) and "payload" in v and "message_id" in v}
         parts, refs = [session["task"].get("description") or ""], []
-        for message in [m for m in session["messages"] if m["role"] == "user" and not m.get("calibration_message")]:
+        for message in [m for m in session["messages"] if m["role"] == "user" and not m.get("calibration_message") and not m.get("parameter_explanation")]:
             payload = payloads.get(message["id"])
             if payload is None:
                 text = message_text(session, message)

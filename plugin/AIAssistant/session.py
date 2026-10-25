@@ -92,6 +92,10 @@ class SessionStore:
                 if operation["status"] in ("queued", "importing", "running", "slicing", "applying", "exporting"):
                     operation["status"] = "interrupted"
                     operation["error"] = "Приложение было закрыто во время операции."
+                    if operation.get("kind") == "parameter_explanation":
+                        for message in session["messages"]:
+                            if message["id"] == operation.get("answer_message_id"):
+                                message["text"] = "Пояснение прервано закрытием приложения. Запросите его ещё раз."
             self._task_status(session)
         if not self.data["sessions"]:
             self.create("Новая задача")
@@ -314,7 +318,7 @@ class SessionStore:
                                   "context": copy.deepcopy(context)})
             if text.strip():
                 s["task"]["description"] = "\n\n".join(
-                    m["text"] for m in s["messages"] if m["role"] == "user" and m["text"] and not m.get("calibration_message"))
+                    m["text"] for m in s["messages"] if m["role"] == "user" and m["text"] and not m.get("calibration_message") and not m.get("parameter_explanation"))
             new_operations = []
             for file_id in file_ids:
                 attachment = s["files"][file_id]

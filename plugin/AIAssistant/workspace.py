@@ -66,7 +66,7 @@ class Workspace:
                     messages.append({"id": uid(), "role": "system", "text": "Объединён чат: " + original["title"], "created_at": now(), "file_ids": []})
                     for old in original["messages"]:
                         # Keep the conversation, but old source IDs and approvals never become new plan authority.
-                        message = {k: copy.deepcopy(old[k]) for k in ("role", "text", "created_at", "context") if k in old}
+                        message = {k: copy.deepcopy(old[k]) for k in ("role", "text", "created_at", "context", "parameter_explanation") if k in old}
                         message.update(id=uid(), file_ids=[mapping[f] for f in old.get("file_ids", []) if f in mapping],
                                        origin={"session_id": original["id"], "message_id": old.get("id")})
                         messages.append(message)
@@ -183,7 +183,18 @@ class Workspace:
         components[0]["details"] = [{"text": "Модель загружена, размеры определены" if geometry == 30 else components[0]["reason"],
                                       "warning": geometry < 30, "source": "Из сцены STE Slicer"}]
         if geometry == 30:
-            components[0]["details"] += [{"text": (o.get("name") or "Модель") + ": " + " × ".join("{:g}".format(v) for v in o["dimensions_mm"]) + " мм",
+            def model_name(obj):
+                names = [f["name"] for f in models if obj["id"] in f.get("object_ids", []) and f.get("name")]
+                if not names:
+                    for ref in obj.get("file_refs", []):
+                        try:
+                            attachment = self.store.file(ref["session_id"], ref["file_id"])
+                            if attachment.get("name"):
+                                names.append(attachment["name"])
+                        except ApiError:
+                            continue
+                return ", ".join(dict.fromkeys(names)) or obj.get("name") or "Модель"
+            components[0]["details"] += [{"text": model_name(o) + ": " + " × ".join("{:g}".format(v) for v in o["dimensions_mm"]) + " мм",
                                            "warning": False, "source": "Из сцены STE Slicer"} for o in objects]
         printer = context.get("printer") or {}
         profile = context.get("profile") or {}
@@ -215,6 +226,9 @@ class Workspace:
                                                "field": key if row["required"] and not row["known"] else "", "question": FIELDS[key]})
         components[2]["details"] += [{"text": c["reason"], "warning": True, "source": "Из карты требований"}
                                      for c in session["task_map"].get("conflicts", []) if not c.get("resolved")]
+        for component in components:
+            component["has_warning"] = any(detail.get("warning") for detail in component["details"])
+            component["complete"] = component["score"] == component["maximum"] and not component["has_warning"]
         return {"version": 2, "score": score, "components": components, "fields": fields, "conflicts": data_conflicts,
                 "input_revision": session["input_revision"], "session_revision": session["revision"], "status": status,
                 "status_text": "Есть противоречия в данных" if data_conflicts else "Данных достаточно для подготовки плана" if status == "sufficient" else "Нужны дополнительные данные",

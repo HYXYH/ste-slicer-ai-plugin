@@ -9,12 +9,11 @@ from PyQt5.QtCore import QObject, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSl
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QPushButton, QPlainTextEdit
 from .native_window import LocalClient, AssistantWindow, request_id
-from .native_view import FLOW, TOOLS, SETTINGS, session_document, analytics_document, human
+from .native_view import FLOW, TOOLS, session_document, analytics_document
 from .user_view import field_label
 from .analytics_view import analytics_projection
 from .knowledge_base import CALIBRATION
-
-PARAMETERS = {key: label for key, (label, unit) in SETTINGS.items()}
+from .parameter_explanations import parameter_rows, parameter_plan
 
 
 def analysis_action(session, config):
@@ -64,6 +63,7 @@ class AssistantController(QObject):
         self.report_search, self.report_filter = "", "all"
         self.report_issue = ""
         self.drafts, self.busy, self.pending = {}, set(), set()
+        self.explanation_pending = set()
         self.message, self.prompt, self.actions = "", None, {}
         self.history, self.analytics_mode, self.disposed = False, False, False
         self.knowledge_mode, self.knowledge_loading = False, False
@@ -228,19 +228,9 @@ class AssistantController(QObject):
             self._document_key = document_key
         workflow, self.actions = self._document
         plans = sorted(session.get("plans", {}).values(), key=lambda p: p.get("created_at", ""))
-        plan = next((p for p in reversed(plans) if p["status"] in ("validated", "approved", "applying", "applied")), None)
+        plan = parameter_plan(session)
         actionable_plan = plan if plan and plan["status"] in ("validated", "approved") else None
-        params = []
-        if plan:
-            choice = plan["selected"]
-            material = next((row["material"].get("name") or choice["material_id"] for row in self.context.get("extruders", []) if (row.get("material") or {}).get("id") == choice["material_id"]), choice["material_id"])
-            profile_context = self.context.get("profile") or {}
-            profile = profile_context.get("name") if choice["profile_id"] in [(profile_context.get(kind) or {}).get("id") for kind in ("quality", "custom")] else choice["profile_id"]
-            params = [{"name": "Режим", "value": {"classic": "3D", "cylindrical": "5D Spiral", "cylindrical_full": "5D"}.get(choice["mode"], choice["mode"])},
-                      {"name": "Материал", "value": material}, {"name": "Профиль", "value": profile or choice["profile_id"]}]
-            for action in plan["actions"]:
-                if action["tool"] == "set_settings":
-                    params.extend({"name": PARAMETERS.get(c["key"], field_label(c["key"])), "value": human(c["value"]) + (" " + SETTINGS[c["key"]][1] if c["key"] in SETTINGS and SETTINGS[c["key"]][1] else "")} for c in action["arguments"]["changes"])
+        params = parameter_rows(plan, self.context)
         runs = session.get("runs", {})
         state = session.get("workflow_state", "idle")
         cube_plan_needed = bool(session.get("calibration_for")) and not any(p["status"] in ("validated", "approved", "applying", "applied") for p in plans) and state not in ("applying", "slicing", "exporting", "waiting_import")
@@ -254,6 +244,8 @@ class AssistantController(QObject):
                       "pending": [session["files"][fid] for fid in self.draft_for(self.current)["files"] if fid in session.get("files", {})] if self.current else [],
                       "notice": self.message, "context": {k: v for k, v in self.context.items() if k != "updated_at"}, "params": params,
                       "planId": actionable_plan["id"] if actionable_plan else "", "planVersion": actionable_plan["version"] if actionable_plan else 0,
+                      "parameterPlanId": plan["id"] if plan else "", "parameterPlanVersion": plan["version"] if plan else 0,
+                      "explainingParameter": self.current in self.explanation_pending or any(o.get("kind") == "parameter_explanation" and o["status"] in ("queued", "running") for o in session.get("operations", {}).values()),
                       "assessment": self.assessment, "analytics": self.analytics_mode, "chats": self.chats_mode, "report": report,
                       "knowledge": self.knowledge_mode, "knowledgeData": self.knowledge_view, "knowledgeOptions": dict(self.knowledge_options),
                       "knowledgeLoading": self.knowledge_loading, "knowledgeIssue": self.knowledge_issue,
@@ -425,6 +417,25 @@ class AssistantController(QObject):
     @pyqtSlot()
     def send(self):
         self.send_files(None)
+
+    @pyqtSlot(str, int, str)
+    def explainParameter(self, pid, version, parameter_id):
+        sid = self.current
+        if not sid or sid in self.explanation_pending or self.view.get("explainingParameter"):
+            return
+        self.explanation_pending.add(sid)
+        self.update_buttons()
+        def done(value):
+            self.explanation_pending.discard(sid)
+            if self.current == sid:
+                self.notice("")
+            self.poll()
+        def failed(error):
+            self.explanation_pending.discard(sid)
+            if self.current == sid:
+                self.notice(error)
+        self.client.call(self.path(sid) + "/plans/" + quote(pid, safe="") + "/explain", done, "POST",
+                         {"version": version, "parameter_id": parameter_id, "request_id": request_id()}, failed)
 
     def send_files(self, files):
         sid = self.current

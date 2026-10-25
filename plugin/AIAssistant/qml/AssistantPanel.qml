@@ -317,7 +317,7 @@ Rectangle {
                         width:parent.width; title:"Готовность данных"
                         RowLayout {
                             Layout.fillWidth:true
-                            Text { text:root.assessment.score === undefined ? "—" : root.assessment.score + " / 100"; font.pixelSize:25; font.bold:true; color:"#13a974" }
+                            Text { text:root.assessment.score === undefined ? "—" : root.assessment.score + " / 100"; font.pixelSize:25; font.bold:true; color:root.assessment.status === "conflict" ? "#d68a24" : root.assessment.status === "sufficient" ? "#13a974" : "#36a2dc" }
                             Item { Layout.fillWidth:true }
                         }
                         Text { Layout.fillWidth:true; text:root.assessment.status_text || "Собираем данные…"; textFormat:Text.PlainText; wrapMode:Text.Wrap; color:"#54748d"; font.pixelSize:11 }
@@ -326,12 +326,14 @@ Rectangle {
                             RowLayout {
                                 id:componentRow
                                 property var component: modelData
+                                property color statusColor: component.has_warning ? "#d68a24" : component.complete ? "#13a974" : "#36a2dc"
+                                objectName:"readiness-" + component.id
                                 Layout.fillWidth:true; spacing:8
                                 Rectangle {
                                     Layout.alignment:Qt.AlignTop
                                     Layout.preferredWidth:28; Layout.preferredHeight:28; radius:8
-                                    color:componentRow.component.id === "geometry" ? "#eaf9f4" : "#edf7ff"
-                                    Text { anchors.centerIn:parent; text:componentRow.component.id === "geometry" ? "✓" : componentRow.component.id === "configuration" ? "◆" : "▣"; color:componentRow.component.id === "geometry" ? "#13a974" : "#008bd6"; font.pixelSize:18; font.bold:true }
+                                    color:componentRow.component.has_warning ? "#fff7e8" : componentRow.component.complete ? "#eaf9f4" : "#edf7ff"
+                                    Text { objectName:componentRow.objectName + "-icon"; anchors.centerIn:parent; text:componentRow.component.has_warning ? "⚠" : componentRow.component.complete ? "✓" : componentRow.component.id === "configuration" ? "◆" : "▣"; color:componentRow.statusColor; font.pixelSize:18; font.bold:true }
                                 }
                                 ColumnLayout {
                                     Layout.fillWidth:true; spacing:5
@@ -340,7 +342,7 @@ Rectangle {
                                         Text { Layout.fillWidth:true; text:componentRow.component.title; wrapMode:Text.Wrap; color:"#36556e"; font.pixelSize:11; font.bold:true }
                                         Text { text:componentRow.component.score + " / " + componentRow.component.maximum; color:"#536d82"; font.pixelSize:10; font.bold:true }
                                     }
-                                    Rectangle { Layout.fillWidth:true; height:6; radius:3; color:"#edf2f6"; Rectangle { width:parent.width * componentRow.component.score / componentRow.component.maximum; height:parent.height; color:componentRow.component.id === "geometry" ? "#13a974" : "#36a2dc"; radius:3 } }
+                                    Rectangle { Layout.fillWidth:true; height:6; radius:3; color:"#edf2f6"; Rectangle { objectName:componentRow.objectName + "-bar"; width:parent.width * componentRow.component.score / componentRow.component.maximum; height:parent.height; color:componentRow.statusColor; radius:3 } }
                                     Repeater {
                                         model:componentRow.component.details || []
                                         ColumnLayout {
@@ -375,13 +377,20 @@ Rectangle {
                                     Layout.fillWidth:true; implicitHeight:32; color:"#f9fcfe"; radius:5; border.color:"#d3e1ea"
                                     Text { anchors.fill:parent; anchors.margins:7; text:modelData.value || "—"; textFormat:Text.PlainText; elide:Text.ElideRight; color:"#36556e"; font.pixelSize:11; verticalAlignment:Text.AlignVCenter }
                                 }
+                                AssistantButton {
+                                    objectName:"explain-" + modelData.id
+                                    Layout.preferredWidth:26; Layout.preferredHeight:26; implicitWidth:26; padding:0; compact:true; text:"ⓘ"
+                                    enabled:!!root.backend && !root.v.explainingParameter
+                                    ToolTip.visible:hovered; ToolTip.text:"Объяснить значение с помощью подключённой LLM"
+                                    Accessible.name:"Объяснить: " + modelData.name
+                                    onClicked: { root.followTail=true; root.backend.explainParameter(root.v.parameterPlanId, root.v.parameterPlanVersion, modelData.id); }
+                                }
                             }
                         }
                         Text { Layout.fillWidth:true; text:"Изменения параметров задавайте в чате. Применение — после согласования плана."; color:"#8b9dab"; wrapMode:Text.Wrap; font.pixelSize:10 }
                         AssistantButton { visible:!!root.v.cubePlanNeeded; Layout.fillWidth:true; text:"Подготовить план куба"; primary:true; enabled:!!root.v.cubeModelReady && !!root.assessment.process_signature && !root.v.busy; onClicked:root.act("analyze") }
                         AssistantButton { Layout.fillWidth:true; text:"✓  Применить и рассчитать"; primary:true; enabled:!!root.v.planId && !root.v.busy && root.assessment.status !== "conflict"; onClicked:root.act("applyPlan") }
                         AssistantButton { visible:root.assessment.recommend_calibration === true; Layout.fillWidth:true; text:"Провести калибровку"; primary:true; enabled:!!root.assessment.process_signature; onClicked:root.modal = "calibration" }
-                        AssistantButton { Layout.fillWidth:true; text:"i  Как работает калибровка"; compact:true; onClicked:root.modal="calibrationInfo" }
                         AssistantButton { visible:!!(root.v.calibrationFor || {}).session_id; Layout.fillWidth:true; text:"Ввести измерения куба"; onClicked:root.modal = "measurements" }
                         AssistantButton { visible:!!(root.v.calibrationFor || {}).session_id; Layout.fillWidth:true; text:"Вернуться к детали"; compact:true; onClicked:root.backend.select(root.v.calibrationFor.session_id) }
                         Text { visible:root.assessment.recommend_calibration === true; Layout.fillWidth:true; text:root.assessment.process_signature ? "Куб 20 мм проверяет размеры и качество печати. Условия эксплуатации и противоречия ТЗ нужно уточнить отдельно." : "Для калибровки выберите принтер, материал и совместимый профиль."; wrapMode:Text.Wrap; color:"#8b9dab"; font.pixelSize:10 }

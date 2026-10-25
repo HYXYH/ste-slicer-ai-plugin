@@ -125,6 +125,53 @@ class AssistantTabTests(unittest.TestCase):
         self.assertNotIn("file:///secret", "\n".join(self.messages))
         self.assertFalse(any("ReferenceError" in m or "TypeError" in m or "Cannot assign" in m or "Binding loop" in m for m in self.messages), "\n".join(self.messages))
 
+    def test_ready_sections_and_parameter_info_use_the_current_plan(self):
+        provider = self.configured(lambda body, count: {"role": "assistant", "content": "Заполнение 60% выбрано для нагруженной детали."})
+        def seed(s):
+            s["files"]["gear"] = {"id": "gear", "kind": "model", "name": "Ведущая шестерня.stl", "object_ids": ["node-1"],
+                                    "status": "imported", "scene_present": True}
+        self.store.edit(self.sid, seed)
+        self.server.workspace.save_answers(self.sid, {"purpose": "Шестерня", "load": "25 Н·м", "temperature": "70 °C", "environment": "Помещение"})
+        plan = workflow.WorkflowTests.prepare_plan(self, [{"id": "infill", "tool": "set_settings", "arguments": {"changes": [
+            {"key": "infill_sparse_density", "value": 60, "target": {"scope": "extruder", "extruder_id": "extruder-1"}}]},
+            "before": None, "after": None, "reason": "Для нагрузки", "source_refs": [{"id": "source", "version": 1}]}])
+        self.controller.receive_session(self.store.get(self.sid))
+        self.controller.receive_assessment(self.sid, self.server.workspace.assessment(self.sid))
+        self.controller.setDraft("Сохранённый черновик")
+        self.panel()
+        root = self.widget.rootObject()
+        def find_item(item, name):
+            if item.objectName() == name:
+                return item
+            for child in item.childItems():
+                found = find_item(child, name)
+                if found is not None:
+                    return found
+            return None
+        for section in ("geometry", "configuration", "requirements"):
+            icon = find_item(root, "readiness-" + section + "-icon")
+            self.assertIsNotNone(icon, section)
+            self.assertEqual(icon.property("text"), "✓")
+            self.assertEqual(icon.property("color").name(), "#13a974")
+            bar = find_item(root, "readiness-" + section + "-bar")
+            self.assertEqual(bar.property("color").name(), "#13a974")
+        self.assertEqual(len(self.controller.view["params"]), 4)
+        for row in self.controller.view["params"]:
+            self.assertIsNotNone(find_item(root, "explain-" + row["id"]))
+        button = find_item(root, "explain-setting-0-0")
+        expression = QQmlExpression(self.widget.engine().rootContext(), button, "clicked()")
+        expression.evaluate()
+        self.assertFalse(expression.hasError(), expression.error().toString())
+        self.pump(lambda: any(o.get("kind") == "parameter_explanation" and o["status"] == "completed"
+                              for o in (self.controller.session or {}).get("operations", {}).values()))
+        self.assertIn("Заполнение 60% выбрано", self.controller.session["messages"][-1]["text"])
+        self.assertEqual(self.controller.draft, "Сохранённый черновик")
+        self.assertEqual(self.controller.view["planId"], plan["id"])
+        self.assertEqual(len(provider.requests), 1)
+        self.widget.resize(1180, 1250)
+        self.screenshot("assistant-parameter-explanation.png")
+        self.assertFalse(any("ReferenceError" in m or "TypeError" in m or "Cannot assign" in m or "Binding loop" in m for m in self.messages), "\n".join(self.messages))
+
     def test_switch_merge_and_leave_tab_preserve_drafts_and_server(self):
         self.controller.setDraft("Черновик А")
         first = self.controller.current

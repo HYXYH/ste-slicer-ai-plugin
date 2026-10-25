@@ -65,6 +65,35 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("Условия эксплуатации", result["task"]["description"])
         self.assertEqual(self.bridge.mutations, [])
 
+    def test_readiness_uses_original_filename_and_consistent_complete_states(self):
+        self.process_bridge()
+        self.bridge.objects[0]["name"] = "765587a5a23b4ea8acbdc8e0ab9dae2e.stl"
+        def seed(s):
+            s["files"]["gear-file"] = {"id": "gear-file", "kind": "model", "name": "Ведущая шестерня.stl",
+                                         "object_ids": ["node-1"], "status": "imported", "scene_present": True}
+        self.store.edit(self.sid, seed)
+        assessment = self.server.workspace.save_answers(self.sid, {"purpose": "Шестерня привода", "load": "25 Н·м",
+                                                                   "temperature": "70 °C", "environment": "В помещении"})
+        self.assertEqual(assessment["score"], 100)
+        self.assertEqual(assessment["status"], "sufficient")
+        self.assertTrue(all(c["complete"] and not c["has_warning"] for c in assessment["components"]))
+        names = [d["text"] for d in assessment["components"][0]["details"]]
+        self.assertIn("Ведущая шестерня.stl: 10 × 20 × 30 мм", names)
+        self.assertNotIn("765587a5a23b4ea8acbdc8e0ab9dae2e", " ".join(names))
+        self.store.edit(self.sid, lambda s: s["task_map"]["conflicts"].append({"id": "conflict", "reason": "Указаны разные нагрузки"}))
+        conflicted = self.server.workspace.assessment(self.sid)
+        self.assertEqual(conflicted["score"], 100)
+        self.assertEqual(conflicted["status"], "conflict")
+        self.assertFalse(conflicted["components"][2]["complete"])
+        self.assertTrue(conflicted["components"][2]["has_warning"])
+
+    def test_readiness_keeps_scene_name_for_models_without_an_attachment(self):
+        self.process_bridge()
+        self.store.edit(self.sid, lambda s: s["task_map"].update(target_object_ids=["node-1"]))
+        assessment = self.server.workspace.assessment(self.sid)
+        self.assertIn("Test mesh: 10 × 20 × 30 мм", [d["text"] for d in assessment["components"][0]["details"]])
+        self.assertFalse(assessment["components"][2]["complete"])
+
     def test_cube_is_real_20mm_mesh_and_measurements_require_matching_process_and_slice(self):
         self.process_bridge()
         child = self.server.workspace.create_calibration(self.sid, "cube1")

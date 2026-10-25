@@ -39,7 +39,7 @@ class Calibration:
         if plan["status"] != "applied" and any(a["tool"] in ("select_material", "select_quality_profile", "set_print_mode") for a in plan["actions"]):
             return
         policy = load_policy(self.store.root)
-        text = session["task"]["description"] + "\n" + "\n".join(m["text"] for m in session["messages"] if m["role"] == "user" and not m.get("calibration_message"))
+        text = session["task"]["description"] + "\n" + "\n".join(m["text"] for m in session["messages"] if m["role"] == "user" and not m.get("calibration_message") and not m.get("parameter_explanation"))
         costs = session.get("calibration_costs", {})
         decision = assess(target, self.db.library(limit=None), text, policy, costs)
         key = hashlib.sha256(encode([conditions(target), decision["unchecked"], costs]).encode("utf-8")).hexdigest()

@@ -45,7 +45,7 @@ def analysis_context(session, current_data):
             if row.get("usable_as_evidence") and row.get("id") in sources:
                 selected.add(row["id"])
                 current_refs.add(row["id"])
-    messages = [m for m in session["messages"] if m["role"] == "user"][-20:]
+    messages = [m for m in session["messages"] if m["role"] == "user" and not m.get("parameter_explanation")][-20:]
     documents = [{"id": fid, "name": session["files"][fid]["name"], "text": session["files"][fid]["document_text"]}
                  for fid in dict.fromkeys(fid for m in session["messages"] if m["role"] == "user" for fid in m.get("file_ids", []))
                  if session["files"].get(fid, {}).get("kind") == "document"]

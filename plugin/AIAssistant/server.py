@@ -54,6 +54,8 @@ class LocalServer(ThreadingMixIn, HTTPServer):
         self.tools.experience = self.print_feedback.db
         self.tools.authorize_change = self.plans.authorize
         self.runner = Runner(self)
+        from .parameter_explanations import ParameterExplanations
+        self.parameter_explanations = ParameterExplanations(self)
         self.bridge.on_slice_failure = lambda sid, oid: self.runner.start(sid, "slice-error-" + oid)
 
     def start(self):
@@ -432,6 +434,9 @@ class Handler(BaseHTTPRequestHandler):
                 return plan, 200
             if len(parts) == 6 and method == "POST":
                 body = self._json()
+                if parts[5] == "explain":
+                    validate(body, obj({"version": {"type": "integer", "minimum": 1}, "parameter_id": ID, "request_id": ID}, ["version", "parameter_id", "request_id"]))
+                    return server.parameter_explanations.start(sid, parts[4], body), 202
                 if parts[5] == "approve":
                     validate(body, obj({"version": {"type": "integer", "minimum": 1}}, ["version"]))
                     return server.plans.approve(sid, parts[4], body["version"]), 200

@@ -308,7 +308,7 @@ class Runner:
                 contract_text = "\nТочная JSON Schema ответа (кроме структуры, сервер проверяет источники и инженерные основания):\n" + json.dumps(proposal_schema(), ensure_ascii=False, separators=(",", ":"))
                 messages = [{"role": "system", "content": SYSTEM + "\n" + DECISION + contract_text}, {"role": "user", "content": json.dumps(context, ensure_ascii=False, separators=(",", ":"))}]
                 # History reduction is deterministic: last 20 user messages; the task map retains earlier requirements.
-                for message in [m for m in session["messages"] if m["role"] == "user" and not m.get("calibration_message")][-20:]:
+                for message in [m for m in session["messages"] if m["role"] == "user" and not m.get("calibration_message") and not m.get("parameter_explanation")][-20:]:
                     content = [{"type": "text", "text": "message_id=" + message["id"] + "\n" + (message["text"] or "Вложения к задаче")}]
                     for fid in message.get("file_ids", []):
                         attachment = self.store.file(sid, fid)

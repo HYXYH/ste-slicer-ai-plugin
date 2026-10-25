@@ -59,4 +59,4 @@ def message_text(session, message):
 
 
 def task_input(session):
-    return "\n\n".join(message_text(session, m) for m in session["messages"] if m["role"] == "user" and not m.get("calibration_message"))
+    return "\n\n".join(message_text(session, m) for m in session["messages"] if m["role"] == "user" and not m.get("calibration_message") and not m.get("parameter_explanation"))
